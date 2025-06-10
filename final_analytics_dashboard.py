@@ -147,7 +147,9 @@ def load_data():
         df['YEAR'] = df['WEEK_BEGIN'].dt.year
         df['MONTH'] = df['WEEK_BEGIN'].dt.month
         df['QUARTER'] = df['WEEK_BEGIN'].dt.quarter
-        df['WEEK_NUMBER'] = df['WEEK_BEGIN'].dt.isocalendar().week
+        # Keep the original WEEK_NUMBER from CSV if it exists, otherwise create formatted version
+        if 'WEEK_NUMBER' not in df.columns:
+            df['WEEK_NUMBER'] = df['WEEK_BEGIN'].dt.strftime('%Y-W%U')
         df['MONTH_NAME'] = df['WEEK_BEGIN'].dt.month_name()
         df['QUARTER_NAME'] = 'Q' + df['QUARTER'].astype(str) + ' ' + df['YEAR'].astype(str)
         
@@ -350,7 +352,7 @@ def show_data_info(df, filtered_df):
     filter_percentage = (len(filtered_df) / len(df)) * 100 if len(df) > 0 else 0
     st.sidebar.markdown(f"""
     • **Filtered Records**: {len(filtered_df):,} ({filter_percentage:.1f}%)  
-    • **Week Coverage**: Week {filtered_df['WEEK_NUMBER'].min()} to Week {filtered_df['WEEK_NUMBER'].max()}  
+    • **Week Coverage**: {filtered_df['WEEK_NUMBER'].min()} to {filtered_df['WEEK_NUMBER'].max()}  
     • **Avg Attendance**: {filtered_df['ACTUAL_ATTENDANCE_RATE'].mean():.1f}%  
     • **Greykite Wins**: {filtered_df['GREYKITE_WINS'].sum()}/{len(filtered_df)} ({filtered_df['GREYKITE_WINS'].mean()*100:.1f}%)  
     """)
@@ -772,7 +774,7 @@ def create_forecast_accuracy_chart(df):
                 colorbar=dict(title="MAPE (%)", x=0.45),
                 opacity=0.7
             ),
-                         text=df.apply(lambda row: f"Week: {row['WEEK_NUMBER']}<br>MAPE: {row['GREYKITE_APE']:.2f}%", axis=1),
+                         text=df.apply(lambda row: f"{row['WEEK_NUMBER']}<br>MAPE: {row['GREYKITE_APE']:.2f}%", axis=1),
             hovertemplate="<b>%{text}</b><br>Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
         ),
         row=1, col=1
@@ -792,7 +794,7 @@ def create_forecast_accuracy_chart(df):
                 colorbar=dict(title="MAPE (%)", x=1.02),
                 opacity=0.7
             ),
-                         text=df.apply(lambda row: f"Week: {row['WEEK_NUMBER']}<br>MAPE: {row['MA_APE']:.2f}%", axis=1),
+                         text=df.apply(lambda row: f"{row['WEEK_NUMBER']}<br>MAPE: {row['MA_APE']:.2f}%", axis=1),
             hovertemplate="<b>%{text}</b><br>Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
         ),
         row=1, col=2
