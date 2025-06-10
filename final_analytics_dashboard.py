@@ -147,9 +147,17 @@ def load_data():
         df['YEAR'] = df['WEEK_BEGIN'].dt.year
         df['MONTH'] = df['WEEK_BEGIN'].dt.month
         df['QUARTER'] = df['WEEK_BEGIN'].dt.quarter
-        # Keep the original WEEK_NUMBER from CSV if it exists, otherwise create formatted version
+        
+        # Handle WEEK_NUMBER from CSV - keep original if exists, otherwise leave blank
         if 'WEEK_NUMBER' not in df.columns:
-            df['WEEK_NUMBER'] = df['WEEK_BEGIN'].dt.strftime('%Y-W%U')
+            df['WEEK_NUMBER'] = ''  # Keep blank if not in CSV
+        else:
+            # Handle missing values in WEEK_NUMBER - convert NaN to empty string
+            df['WEEK_NUMBER'] = df['WEEK_NUMBER'].fillna('').astype(str)
+        
+        # Create a flag for missing week numbers
+        df['WEEK_NUMBER_MISSING'] = (df['WEEK_NUMBER'] == '') | (df['WEEK_NUMBER'].isna())
+        
         df['MONTH_NAME'] = df['WEEK_BEGIN'].dt.month_name()
         df['QUARTER_NAME'] = 'Q' + df['QUARTER'].astype(str) + ' ' + df['YEAR'].astype(str)
         
@@ -350,9 +358,20 @@ def show_data_info(df, filtered_df):
     # Filtered data info
     st.sidebar.markdown("**🔍 Filtered Dataset:**")
     filter_percentage = (len(filtered_df) / len(df)) * 100 if len(df) > 0 else 0
+    
+    # Handle week coverage safely
+    valid_weeks = filtered_df[filtered_df['WEEK_NUMBER'] != '']['WEEK_NUMBER']
+    week_coverage = "N/A"
+    if len(valid_weeks) > 0:
+        week_coverage = f"{valid_weeks.min()} to {valid_weeks.max()}"
+    
+    # Check for missing week numbers
+    missing_weeks = filtered_df['WEEK_NUMBER_MISSING'].sum()
+    missing_week_info = f" (⚠️ {missing_weeks} missing)" if missing_weeks > 0 else ""
+    
     st.sidebar.markdown(f"""
     • **Filtered Records**: {len(filtered_df):,} ({filter_percentage:.1f}%)  
-    • **Week Coverage**: {filtered_df['WEEK_NUMBER'].min()} to {filtered_df['WEEK_NUMBER'].max()}  
+    • **Week Coverage**: {week_coverage}{missing_week_info}  
     • **Avg Attendance**: {filtered_df['ACTUAL_ATTENDANCE_RATE'].mean():.1f}%  
     • **Greykite Wins**: {filtered_df['GREYKITE_WINS'].sum()}/{len(filtered_df)} ({filtered_df['GREYKITE_WINS'].mean()*100:.1f}%)  
     """)
@@ -387,6 +406,16 @@ def create_executive_summary(df):
     recent_win_rate = recent_data['GREYKITE_WINS'].mean() * 100 if len(recent_data) > 0 else 0
     trend = "📈 IMPROVING" if recent_win_rate > win_rate else "📉 DECLINING" if recent_win_rate < win_rate - 5 else "➡️ STABLE"
     
+    # Check for missing week numbers
+    missing_weeks_count = df['WEEK_NUMBER_MISSING'].sum()
+    data_quality_note = ""
+    if missing_weeks_count > 0:
+        data_quality_note = f"""
+        <div style="background: #fff3cd; padding: 1rem; border-radius: 10px; border-left: 4px solid #ffc107; margin: 1rem 0;">
+            <strong>⚠️ Data Quality Note:</strong> {missing_weeks_count} records have missing WEEK_NUMBER values and will show as blank in charts.
+        </div>
+        """
+    
     st.markdown(f"""
     <div class="success-box">
     <h3>🏆 KEY PERFORMANCE HIGHLIGHTS</h3>
@@ -406,6 +435,7 @@ def create_executive_summary(df):
         </div>
     </div>
     </div>
+    {data_quality_note}
     """, unsafe_allow_html=True)
 
 def create_enhanced_kpi_metrics(df):
