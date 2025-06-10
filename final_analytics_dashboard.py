@@ -350,7 +350,7 @@ def show_data_info(df, filtered_df):
     filter_percentage = (len(filtered_df) / len(df)) * 100 if len(df) > 0 else 0
     st.sidebar.markdown(f"""
     • **Filtered Records**: {len(filtered_df):,} ({filter_percentage:.1f}%)  
-    • **Week Coverage**: Week {filtered_df['WEEK'].min()} to Week {filtered_df['WEEK'].max()}  
+    • **Week Coverage**: Week {filtered_df['WEEK_NUMBER'].min()} to Week {filtered_df['WEEK_NUMBER'].max()}  
     • **Avg Attendance**: {filtered_df['ACTUAL_ATTENDANCE_RATE'].mean():.1f}%  
     • **Greykite Wins**: {filtered_df['GREYKITE_WINS'].sum()}/{len(filtered_df)} ({filtered_df['GREYKITE_WINS'].mean()*100:.1f}%)  
     """)
@@ -473,13 +473,12 @@ def create_outliers_table(df):
     
     # Prepare outliers table with requested columns
     outliers_display = outliers_df[[
-        'WEEK', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'SHIFT_TIME',
+        'WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'SHIFT_TIME',
         'ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST',
         'GREYKITE_APE', 'MA_APE', 'GREYKITE_APE_OUTLIER', 'MA_APE_OUTLIER'
     ]].copy()
     
-    # Format the data for better display
-    outliers_display['WEEK'] = outliers_display['WEEK']  # Keep as-is from CSV
+    # Format the data for better display (keep WEEK_NUMBER as-is)
     outliers_display['ACTUAL_ATTENDANCE_RATE'] = outliers_display['ACTUAL_ATTENDANCE_RATE'].round(2)
     outliers_display['GREYKITE_FORECAST'] = outliers_display['GREYKITE_FORECAST'].round(2)
     outliers_display['MOVING_AVG_4WEEK_FORECAST'] = outliers_display['MOVING_AVG_4WEEK_FORECAST'].round(2)
@@ -773,7 +772,7 @@ def create_forecast_accuracy_chart(df):
                 colorbar=dict(title="MAPE (%)", x=0.45),
                 opacity=0.7
             ),
-                         text=df.apply(lambda row: f"Week: {row['WEEK']}<br>MAPE: {row['GREYKITE_APE']:.2f}%", axis=1),
+                         text=df.apply(lambda row: f"Week: {row['WEEK_NUMBER']}<br>MAPE: {row['GREYKITE_APE']:.2f}%", axis=1),
             hovertemplate="<b>%{text}</b><br>Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
         ),
         row=1, col=1
@@ -793,7 +792,7 @@ def create_forecast_accuracy_chart(df):
                 colorbar=dict(title="MAPE (%)", x=1.02),
                 opacity=0.7
             ),
-                         text=df.apply(lambda row: f"Week: {row['WEEK']}<br>MAPE: {row['MA_APE']:.2f}%", axis=1),
+                         text=df.apply(lambda row: f"Week: {row['WEEK_NUMBER']}<br>MAPE: {row['MA_APE']:.2f}%", axis=1),
             hovertemplate="<b>%{text}</b><br>Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
         ),
         row=1, col=2
