@@ -159,7 +159,7 @@ def load_data():
         df['GREYKITE_ABS_ERROR'] = np.abs(df['GREYKITE_ERROR'])
         df['MA_ABS_ERROR'] = np.abs(df['MA_ERROR'])
         
-        # Percentage errors
+        # Percentage errors (APE values for MAPE calculation)
         df['GREYKITE_APE'] = np.abs(df['GREYKITE_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
         df['MA_APE'] = np.abs(df['MA_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
         
@@ -455,7 +455,7 @@ def create_enhanced_kpi_metrics(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
 def create_outliers_table(df):
-    """Create comprehensive outliers analysis with MAPE focus."""
+    """Create comprehensive outliers analysis table."""
     st.markdown("### 🚨 OUTLIERS ANALYSIS")
     
     if len(df) == 0:
@@ -469,410 +469,381 @@ def create_outliers_table(df):
     
     if len(outliers_df) == 0:
         st.info("✅ No outliers detected in the current filtered dataset.")
-    else:
-        # Display summary metrics with MAPE focus
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("🚨 Total Outliers", len(outliers_df))
-        with col2:
-            greykite_outliers = len(outliers_df[outliers_df['GREYKITE_APE_OUTLIER'] == 1])
-            st.metric("🎯 Greykite Outliers", greykite_outliers)
-        with col3:
-            ma_outliers = len(outliers_df[outliers_df['MA_APE_OUTLIER'] == 1])
-            st.metric("📊 MA Outliers", ma_outliers)
+        return
     
-    # Calculate MAPE by segments for outlier analysis
+    # Prepare outliers table with requested columns
+    outliers_display = outliers_df[[
+        'WEEK_BEGIN', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'SHIFT_TIME',
+        'ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST',
+        'GREYKITE_APE', 'MA_APE', 'GREYKITE_APE_OUTLIER', 'MA_APE_OUTLIER'
+    ]].copy()
+    
+    # Format the data for better display
+    outliers_display['WEEK_BEGIN'] = outliers_display['WEEK_BEGIN'].dt.strftime('%Y-%m-%d')
+    outliers_display['ACTUAL_ATTENDANCE_RATE'] = outliers_display['ACTUAL_ATTENDANCE_RATE'].round(2)
+    outliers_display['GREYKITE_FORECAST'] = outliers_display['GREYKITE_FORECAST'].round(2)
+    outliers_display['MOVING_AVG_4WEEK_FORECAST'] = outliers_display['MOVING_AVG_4WEEK_FORECAST'].round(2)
+    outliers_display['GREYKITE_APE'] = outliers_display['GREYKITE_APE'].round(2)
+    outliers_display['MA_APE'] = outliers_display['MA_APE'].round(2)
+    
+    # Rename columns for better readability (displaying as MAPE values)
+    outliers_display.columns = [
+        'Week', 'Location', 'Department', 'Shift',
+        'Actual Attendance (%)', 'Greykite Forecast (%)', '4-Week MA Forecast (%)',
+        'Greykite MAPE (%)', 'MA MAPE (%)', 'Greykite Outlier', 'MA Outlier'
+    ]
+    
+    # Create outlier type indicator
+    outliers_display['Outlier Type'] = outliers_display.apply(
+        lambda row: 'Both Models' if (row['Greykite Outlier'] == 1 and row['MA Outlier'] == 1)
+        else 'Greykite Only' if row['Greykite Outlier'] == 1
+        else 'MA Only', axis=1
+    )
+    
+    # Display summary metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("🚨 Total Outliers", len(outliers_display))
+    with col2:
+        greykite_outliers = len(outliers_display[outliers_display['Greykite Outlier'] == 1])
+        st.metric("🎯 Greykite Outliers", greykite_outliers)
+    with col3:
+        ma_outliers = len(outliers_display[outliers_display['MA Outlier'] == 1])
+        st.metric("📊 MA Outliers", ma_outliers)
+    
     st.markdown("""
     <div class="outlier-table">
-    <h4>📋 MAPE Analysis by Segments (Outlier Impact)</h4>
-    <p><strong>Note:</strong> Outliers are detected using the IQR method, showing MAPE impact by different segments</p>
+    <h4>📋 Detailed Outliers Information</h4>
+    <p><strong>Note:</strong> Outliers are detected using the IQR method (values beyond Q1 - 1.5×IQR or Q3 + 1.5×IQR). MAPE values shown represent individual week performance.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # MAPE by Location
-    col1, col2 = st.columns(2)
+    # Display the enhanced table
+    display_columns = [
+        'Week', 'Location', 'Department', 'Shift', 'Outlier Type',
+        'Actual Attendance (%)', 'Greykite Forecast (%)', '4-Week MA Forecast (%)',
+        'Greykite MAPE (%)', 'MA MAPE (%)'
+    ]
     
-    with col1:
-        st.markdown("**🏢 MAPE by Location:**")
-        location_mape = df.groupby('WORK_LOCATION').agg({
-            'GREYKITE_APE': 'mean',
-            'MA_APE': 'mean',
-            'GREYKITE_APE_OUTLIER': 'sum',
-            'MA_APE_OUTLIER': 'sum'
-        }).round(2)
-        location_mape.columns = ['Greykite MAPE (%)', 'MA MAPE (%)', 'Greykite Outliers', 'MA Outliers']
-        st.dataframe(location_mape, use_container_width=True)
+    st.dataframe(
+        outliers_display[display_columns].sort_values(['Week', 'Location']),
+        use_container_width=True,
+        height=450
+    )
     
-    with col2:
-        st.markdown("**🏭 MAPE by Department:**")
-        dept_mape = df.groupby('DEPARTMENT_GROUP').agg({
-            'GREYKITE_APE': 'mean',
-            'MA_APE': 'mean',
-            'GREYKITE_APE_OUTLIER': 'sum',
-            'MA_APE_OUTLIER': 'sum'
-        }).round(2)
-        dept_mape.columns = ['Greykite MAPE (%)', 'MA MAPE (%)', 'Greykite Outliers', 'MA Outliers']
-        st.dataframe(dept_mape, use_container_width=True)
-    
-    # Overall MAPE comparison
-    overall_greykite_mape = df['GREYKITE_APE'].mean()
-    overall_ma_mape = df['MA_APE'].mean()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"""
-        **🎯 Overall Performance:**
-        - **Greykite MAPE**: {overall_greykite_mape:.2f}%
-        - **Total Greykite Outliers**: {df['GREYKITE_APE_OUTLIER'].sum()}
-        """)
-    
-    with col2:
-        st.markdown(f"""
-        **📊 Baseline Performance:**
-        - **MA MAPE**: {overall_ma_mape:.2f}%
-        - **Total MA Outliers**: {df['MA_APE_OUTLIER'].sum()}
-        """)
+    # Additional insights
+    if len(outliers_display) > 0:
+        worst_greykite = outliers_display.loc[outliers_display['Greykite MAPE (%)'].idxmax()]
+        worst_ma = outliers_display.loc[outliers_display['MA MAPE (%)'].idxmax()]
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"""
+            **🎯 Worst Greykite Performance:**
+            - Week: {worst_greykite['Week']}
+            - Location: {worst_greykite['Location']}
+            - MAPE: {worst_greykite['Greykite MAPE (%)']}%
+            """)
+        
+        with col2:
+            st.markdown(f"""
+            **📊 Worst MA Performance:**
+            - Week: {worst_ma['Week']}
+            - Location: {worst_ma['Location']}
+            - MAPE: {worst_ma['MA MAPE (%)']}%
+            """)
 
-def create_performance_timeline(df):
-    """Create comprehensive performance timeline."""
-    st.markdown("### 📅 PERFORMANCE TIMELINE ANALYSIS")
+def create_weekly_mape_trends(df):
+    """Create weekly MAPE trends chart."""
+    st.markdown("### 📅 WEEKLY MAPE TRENDS")
     
     if len(df) == 0:
         st.warning("⚠️ No data available for the selected filters.")
         return
     
-    # Prepare data for timeline
-    timeline_data = df.groupby('WEEK_BEGIN').agg({
-        'GREYKITE_APE': ['mean', 'std'],
-        'MA_APE': ['mean', 'std'],
+    # Prepare weekly aggregated data
+    weekly_data = df.groupby('WEEK_BEGIN').agg({
+        'GREYKITE_APE': 'mean',  # Weekly MAPE
+        'MA_APE': 'mean',        # Weekly MAPE
         'GREYKITE_WINS': 'mean',
         'PERFORMANCE_IMPROVEMENT': 'mean'
     }).reset_index()
     
-    timeline_data.columns = [
-        'WEEK_BEGIN', 'GREYKITE_MAPE_MEAN', 'GREYKITE_MAPE_STD',
-        'MA_MAPE_MEAN', 'MA_MAPE_STD', 'WIN_RATE', 'IMPROVEMENT'
-    ]
+    weekly_data.columns = ['WEEK_BEGIN', 'GREYKITE_MAPE', 'MA_MAPE', 'WIN_RATE', 'IMPROVEMENT']
     
-    # Create subplot figure
+    # Create the main chart
     fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=[
-            "📈 MAPE Comparison Over Time", 
-            "🏆 Weekly Win Rate", 
-            "📊 Performance Improvement", 
-            "📉 Error Trends"
-        ],
-        specs=[[{"secondary_y": False}, {"secondary_y": False}],
-               [{"secondary_y": False}, {"secondary_y": False}]]
+        rows=2, cols=1,
+        subplot_titles=("Weekly MAPE Comparison", "Weekly Win Rate"),
+        specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
+        vertical_spacing=0.1
     )
     
-    # MAPE comparison
+    # MAPE trends
     fig.add_trace(
         go.Scatter(
-            x=timeline_data['WEEK_BEGIN'],
-            y=timeline_data['GREYKITE_MAPE_MEAN'],
+            x=weekly_data['WEEK_BEGIN'],
+            y=weekly_data['GREYKITE_MAPE'],
+            mode='lines+markers',
             name='Greykite MAPE',
             line=dict(color='#1f77b4', width=3),
-            mode='lines+markers'
+            marker=dict(size=8)
         ),
         row=1, col=1
     )
     
     fig.add_trace(
         go.Scatter(
-            x=timeline_data['WEEK_BEGIN'],
-            y=timeline_data['MA_MAPE_MEAN'],
-            name='Moving Avg MAPE',
-            line=dict(color='#ff7f0e', width=3),
-            mode='lines+markers'
-        ),
-        row=1, col=1
-    )
-    
-    # Win rate
-    fig.add_trace(
-        go.Scatter(
-            x=timeline_data['WEEK_BEGIN'],
-            y=timeline_data['WIN_RATE'] * 100,
-            name='Win Rate %',
-            line=dict(color='#2ca02c', width=3),
+            x=weekly_data['WEEK_BEGIN'],
+            y=weekly_data['MA_MAPE'],
             mode='lines+markers',
-            fill='tonexty'
+            name='4-Week MA MAPE',
+            line=dict(color='#ff7f0e', width=3),
+            marker=dict(size=8)
         ),
-        row=1, col=2
+        row=1, col=1
     )
     
-    # Performance improvement
+    # Add performance improvement on secondary y-axis
     fig.add_trace(
         go.Scatter(
-            x=timeline_data['WEEK_BEGIN'],
-            y=timeline_data['IMPROVEMENT'],
-            name='Improvement %',
+            x=weekly_data['WEEK_BEGIN'],
+            y=weekly_data['IMPROVEMENT'],
+            mode='lines',
+            name='Performance Improvement (%)',
+            line=dict(color='#2ca02c', width=2, dash='dot'),
+            yaxis='y2'
+        ),
+        row=1, col=1, secondary_y=True
+    )
+    
+    # Win rate chart
+    fig.add_trace(
+        go.Scatter(
+            x=weekly_data['WEEK_BEGIN'],
+            y=weekly_data['WIN_RATE'] * 100,
+            mode='lines+markers',
+            name='Win Rate (%)',
             line=dict(color='#d62728', width=3),
-            mode='lines+markers'
+            marker=dict(size=8),
+            fill='tonexty'
         ),
         row=2, col=1
     )
     
-    # Error trends
-    fig.add_trace(
-        go.Scatter(
-            x=timeline_data['WEEK_BEGIN'],
-            y=timeline_data['GREYKITE_MAPE_STD'],
-            name='Greykite MAPE Std',
-            line=dict(color='#9467bd', width=2),
-            mode='lines'
-        ),
-        row=2, col=2
-    )
-    
-    fig.add_trace(
-        go.Scatter(
-            x=timeline_data['WEEK_BEGIN'],
-            y=timeline_data['MA_MAPE_STD'],
-            name='MA MAPE Std',
-            line=dict(color='#8c564b', width=2),
-            mode='lines'
-        ),
-        row=2, col=2
-    )
+    # Update layout
+    fig.update_xaxes(title_text="Week", row=2, col=1)
+    fig.update_yaxes(title_text="MAPE (%)", row=1, col=1)
+    fig.update_yaxes(title_text="Improvement (%)", secondary_y=True, row=1, col=1)
+    fig.update_yaxes(title_text="Win Rate (%)", row=2, col=1)
     
     fig.update_layout(
-        height=800,
-        title_text="📊 COMPREHENSIVE PERFORMANCE TIMELINE",
+        height=700,
+        title_text="📊 WEEKLY MAPE PERFORMANCE TRENDS",
         showlegend=True
     )
     
     st.plotly_chart(fig, use_container_width=True)
-
-def create_segment_analysis(df):
-    """Create comprehensive MAPE-focused segment analysis."""
-    st.markdown("### 🎯 MAPE PERFORMANCE BY SEGMENTS")
     
-    if len(df) == 0:
-        st.warning("⚠️ No data available for the selected filters.")
-        return
-    
-    col1, col2 = st.columns(2)
-    
+    # Summary statistics
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        # Location MAPE performance
-        if df['WORK_LOCATION'].nunique() > 1:
-            location_performance = df.groupby('WORK_LOCATION').agg({
-                'GREYKITE_WINS': 'mean',
-                'GREYKITE_APE': 'mean',  # This will be displayed as MAPE
-                'MA_APE': 'mean',        # This will be displayed as MAPE
-                'PERFORMANCE_IMPROVEMENT': 'mean'
-            }).round(2).reset_index()
-            
-            location_performance['WIN_RATE'] = (location_performance['GREYKITE_WINS'] * 100).round(1)
-            location_performance['MAPE_IMPROVEMENT'] = (
-                ((location_performance['MA_APE'] - location_performance['GREYKITE_APE']) / 
-                 location_performance['MA_APE']) * 100
-            ).round(2)
-            
-            # Create MAPE comparison chart
-            fig_loc = px.bar(
-                location_performance.sort_values('GREYKITE_APE', ascending=True),
-                x='GREYKITE_APE',
-                y='WORK_LOCATION',
-                title="🏢 GREYKITE MAPE BY LOCATION",
-                labels={'GREYKITE_APE': 'Greykite MAPE (%)', 'WORK_LOCATION': 'Location'},
-                color='MAPE_IMPROVEMENT',
-                color_continuous_scale='RdYlGn',
-                text='WIN_RATE'
-            )
-            fig_loc.update_traces(texttemplate='%{text}% Win Rate', textposition='outside')
-            fig_loc.update_layout(height=500)
-            st.plotly_chart(fig_loc, use_container_width=True)
-            
-            # Display MAPE summary table
-            st.markdown("**📊 Location MAPE Summary:**")
-            summary_display = location_performance[['WORK_LOCATION', 'GREYKITE_APE', 'MA_APE', 'WIN_RATE', 'MAPE_IMPROVEMENT']].copy()
-            summary_display.columns = ['Location', 'Greykite MAPE (%)', 'MA MAPE (%)', 'Win Rate (%)', 'MAPE Improvement (%)']
-            st.dataframe(summary_display, use_container_width=True)
-        else:
-            st.info("Only one location in filtered data")
+        avg_greykite_mape = weekly_data['GREYKITE_MAPE'].mean()
+        st.metric("📊 Avg Weekly Greykite MAPE", f"{avg_greykite_mape:.2f}%")
     
     with col2:
-        # Department MAPE performance
-        if df['DEPARTMENT_GROUP'].nunique() > 1:
-            dept_performance = df.groupby('DEPARTMENT_GROUP').agg({
-                'GREYKITE_WINS': 'mean',
-                'GREYKITE_APE': 'mean',  # This will be displayed as MAPE
-                'MA_APE': 'mean',        # This will be displayed as MAPE
-                'PERFORMANCE_IMPROVEMENT': 'mean'
-            }).round(2).reset_index()
-            
-            dept_performance['WIN_RATE'] = (dept_performance['GREYKITE_WINS'] * 100).round(1)
-            dept_performance['MAPE_IMPROVEMENT'] = (
-                ((dept_performance['MA_APE'] - dept_performance['GREYKITE_APE']) / 
-                 dept_performance['MA_APE']) * 100
-            ).round(2)
-            
-            # Create MAPE comparison chart
-            fig_dept = px.bar(
-                dept_performance.sort_values('GREYKITE_APE', ascending=True),
-                x='GREYKITE_APE',
-                y='DEPARTMENT_GROUP',
-                title="🏭 GREYKITE MAPE BY DEPARTMENT",
-                labels={'GREYKITE_APE': 'Greykite MAPE (%)', 'DEPARTMENT_GROUP': 'Department'},
-                color='MAPE_IMPROVEMENT',
-                color_continuous_scale='RdYlGn',
-                text='WIN_RATE'
-            )
-            fig_dept.update_traces(texttemplate='%{text}% Win Rate', textposition='outside')
-            fig_dept.update_layout(height=500)
-            st.plotly_chart(fig_dept, use_container_width=True)
-            
-            # Display MAPE summary table
-            st.markdown("**📊 Department MAPE Summary:**")
-            summary_display = dept_performance[['DEPARTMENT_GROUP', 'GREYKITE_APE', 'MA_APE', 'WIN_RATE', 'MAPE_IMPROVEMENT']].copy()
-            summary_display.columns = ['Department', 'Greykite MAPE (%)', 'MA MAPE (%)', 'Win Rate (%)', 'MAPE Improvement (%)']
-            st.dataframe(summary_display, use_container_width=True)
-        else:
-            st.info("Only one department in filtered data")
-
-def create_error_analysis(df):
-    """Create MAPE-focused analysis and summary."""
-    st.markdown("### 📊 MAPE ANALYSIS & SUMMARY")
-    
-    if len(df) == 0:
-        st.warning("⚠️ No data available for the selected filters.")
-        return
-    
-    # Calculate overall MAPE statistics
-    greykite_mape = df['GREYKITE_APE'].mean()
-    ma_mape = df['MA_APE'].mean()
-    mape_improvement = ((ma_mape - greykite_mape) / ma_mape) * 100 if ma_mape != 0 else 0
-    
-    # Display overall MAPE metrics
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(
-            "🎯 Greykite MAPE",
-            f"{greykite_mape:.2f}%",
-            help="Mean Absolute Percentage Error for Greykite model"
-        )
-    
-    with col2:
-        st.metric(
-            "📊 Moving Average MAPE",
-            f"{ma_mape:.2f}%",
-            help="Mean Absolute Percentage Error for Moving Average baseline"
-        )
+        avg_ma_mape = weekly_data['MA_MAPE'].mean()
+        st.metric("📈 Avg Weekly MA MAPE", f"{avg_ma_mape:.2f}%")
     
     with col3:
-        st.metric(
-            "📈 MAPE Improvement",
-            f"{mape_improvement:.2f}%",
-            delta="vs MA baseline",
-            help="Percentage improvement in MAPE compared to Moving Average"
-        )
+        avg_win_rate = weekly_data['WIN_RATE'].mean() * 100
+        st.metric("🏆 Avg Win Rate", f"{avg_win_rate:.1f}%")
     
-    st.markdown("---")
+    with col4:
+        avg_improvement = weekly_data['IMPROVEMENT'].mean()
+        st.metric("🎯 Avg Improvement", f"{avg_improvement:.2f}%")
+
+def create_large_error_analysis(df):
+    """Create large error analysis focusing on MAPE >= 6%."""
+    st.markdown("### 🔍 LARGE ERROR ANALYSIS (MAPE ≥ 6%)")
     
-    # MAPE comparison visualization
-    col1, col2 = st.columns(2)
+    if len(df) == 0:
+        st.warning("⚠️ No data available for the selected filters.")
+        return
     
-    with col1:
-        # MAPE comparison bar chart
-        mape_comparison = pd.DataFrame({
-            'Model': ['Greykite', 'Moving Average'],
-            'MAPE': [greykite_mape, ma_mape],
-            'Color': ['#1f77b4', '#ff7f0e']
-        })
-        
-        fig_bar = px.bar(
-            mape_comparison,
-            x='Model',
-            y='MAPE',
-            title="📊 MAPE Comparison",
-            color='Model',
-            text='MAPE'
-        )
-        fig_bar.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-        fig_bar.update_layout(height=400, showlegend=False)
-        st.plotly_chart(fig_bar, use_container_width=True)
-    
-    with col2:
-        # MAPE statistics table
-        st.markdown("**📋 MAPE Statistical Summary:**")
-        
-        mape_stats = pd.DataFrame({
-            'Metric': ['Mean', 'Median', 'Std Dev', 'Min', 'Max', '25th Percentile', '75th Percentile'],
-            'Greykite MAPE (%)': [
-                df['GREYKITE_APE'].mean(),
-                df['GREYKITE_APE'].median(),
-                df['GREYKITE_APE'].std(),
-                df['GREYKITE_APE'].min(),
-                df['GREYKITE_APE'].max(),
-                df['GREYKITE_APE'].quantile(0.25),
-                df['GREYKITE_APE'].quantile(0.75)
-            ],
-            'MA MAPE (%)': [
-                df['MA_APE'].mean(),
-                df['MA_APE'].median(),
-                df['MA_APE'].std(),
-                df['MA_APE'].min(),
-                df['MA_APE'].max(),
-                df['MA_APE'].quantile(0.25),
-                df['MA_APE'].quantile(0.75)
-            ]
-        }).round(2)
-        
-        st.dataframe(mape_stats, use_container_width=True)
-    
-    # Performance insights
-    st.markdown("---")
-    st.markdown("### 🎯 MAPE PERFORMANCE INSIGHTS")
+    # Filter for large errors (MAPE >= 6%)
+    large_errors_greykite = df[df['GREYKITE_APE'] >= 6].copy()
+    large_errors_ma = df[df['MA_APE'] >= 6].copy()
     
     col1, col2 = st.columns(2)
     
     with col1:
-        # Best and worst MAPE periods
-        best_week_idx = df['GREYKITE_APE'].idxmin()
-        worst_week_idx = df['GREYKITE_APE'].idxmax()
-        
-        best_week = df.loc[best_week_idx]
-        worst_week = df.loc[worst_week_idx]
-        
-        st.markdown(f"""
-        **🏆 Best Greykite Performance:**
-        - **Week**: {best_week['WEEK_BEGIN'].strftime('%Y-%m-%d')}
-        - **MAPE**: {best_week['GREYKITE_APE']:.2f}%
-        - **Location**: {best_week['WORK_LOCATION']}
-        - **Department**: {best_week['DEPARTMENT_GROUP']}
-        """)
-        
-        st.markdown(f"""
-        **⚠️ Worst Greykite Performance:**
-        - **Week**: {worst_week['WEEK_BEGIN'].strftime('%Y-%m-%d')}
-        - **MAPE**: {worst_week['GREYKITE_APE']:.2f}%
-        - **Location**: {worst_week['WORK_LOCATION']}
-        - **Department**: {worst_week['DEPARTMENT_GROUP']}
-        """)
+        st.metric("🎯 Greykite Large Errors", len(large_errors_greykite))
+        if len(large_errors_greykite) > 0:
+            avg_large_mape = large_errors_greykite['GREYKITE_APE'].mean()
+            st.metric("📊 Avg MAPE (Large Errors)", f"{avg_large_mape:.2f}%")
     
     with col2:
-        # Model consistency analysis
-        greykite_consistency = df['GREYKITE_APE'].std()
-        ma_consistency = df['MA_APE'].std()
+        st.metric("📈 MA Large Errors", len(large_errors_ma))
+        if len(large_errors_ma) > 0:
+            avg_large_mape_ma = large_errors_ma['MA_APE'].mean()
+            st.metric("📊 Avg MAPE (Large Errors)", f"{avg_large_mape_ma:.2f}%")
+    
+    # Analysis by segments
+    if len(large_errors_greykite) > 0 or len(large_errors_ma) > 0:
+        st.markdown("#### 📊 Large Errors by Segment")
         
-        win_rate = (df['GREYKITE_WINS'].sum() / len(df)) * 100
+        col1, col2 = st.columns(2)
         
-        st.markdown(f"""
-        **📊 Model Consistency (Lower is Better):**
-        - **Greykite MAPE Std Dev**: {greykite_consistency:.2f}%
-        - **MA MAPE Std Dev**: {ma_consistency:.2f}%
-        - **Consistency Advantage**: {'Greykite' if greykite_consistency < ma_consistency else 'Moving Average'}
+        with col1:
+            if len(large_errors_greykite) > 0:
+                st.markdown("**🎯 Greykite Large Errors by Location:**")
+                location_errors = large_errors_greykite.groupby('WORK_LOCATION').agg({
+                    'GREYKITE_APE': ['count', 'mean', 'max']
+                }).round(2)
+                location_errors.columns = ['Count', 'Avg MAPE (%)', 'Max MAPE (%)']
+                st.dataframe(location_errors, use_container_width=True)
         
-        **🏆 Overall Performance:**
-        - **Win Rate**: {win_rate:.1f}%
-        - **Total Predictions**: {len(df):,}
-        - **Greykite Wins**: {df['GREYKITE_WINS'].sum():,}
-        """)
+        with col2:
+            if len(large_errors_ma) > 0:
+                st.markdown("**📈 MA Large Errors by Location:**")
+                location_errors_ma = large_errors_ma.groupby('WORK_LOCATION').agg({
+                    'MA_APE': ['count', 'mean', 'max']
+                }).round(2)
+                location_errors_ma.columns = ['Count', 'Avg MAPE (%)', 'Max MAPE (%)']
+                st.dataframe(location_errors_ma, use_container_width=True)
+        
+        # Large errors distribution
+        if len(large_errors_greykite) > 0 and len(large_errors_ma) > 0:
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=["Greykite Large Errors Distribution", "MA Large Errors Distribution"]
+            )
+            
+            fig.add_trace(
+                go.Histogram(
+                    x=large_errors_greykite['GREYKITE_APE'],
+                    name='Greykite MAPE ≥ 6%',
+                    nbinsx=20,
+                    marker_color='#1f77b4',
+                    opacity=0.7
+                ),
+                row=1, col=1
+            )
+            
+            fig.add_trace(
+                go.Histogram(
+                    x=large_errors_ma['MA_APE'],
+                    name='MA MAPE ≥ 6%',
+                    nbinsx=20,
+                    marker_color='#ff7f0e',
+                    opacity=0.7
+                ),
+                row=1, col=2
+            )
+            
+            fig.update_layout(height=400, title_text="📊 LARGE ERRORS DISTRIBUTION")
+            st.plotly_chart(fig, use_container_width=True)
+
+def create_forecast_accuracy_chart(df):
+    """Create forecast accuracy analysis chart."""
+    st.markdown("### 📈 FORECAST ACCURACY ANALYSIS")
+    
+    if len(df) == 0:
+        st.warning("⚠️ No data available for the selected filters.")
+        return
+    
+    # Create accuracy scatter plots
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=["Greykite: Actual vs Predicted", "4-Week MA: Actual vs Predicted"]
+    )
+    
+    # Greykite scatter plot
+    fig.add_trace(
+        go.Scatter(
+            x=df['ACTUAL_ATTENDANCE_RATE'],
+            y=df['GREYKITE_FORECAST'],
+            mode='markers',
+            name='Greykite',
+            marker=dict(
+                color=df['GREYKITE_APE'],
+                colorscale='RdYlBu_r',
+                size=8,
+                colorbar=dict(title="MAPE (%)", x=0.45),
+                opacity=0.7
+            ),
+            text=df.apply(lambda row: f"Week: {row['WEEK_BEGIN'].strftime('%Y-%m-%d')}<br>MAPE: {row['GREYKITE_APE']:.2f}%", axis=1),
+            hovertemplate="<b>%{text}</b><br>Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
+        ),
+        row=1, col=1
+    )
+    
+    # MA scatter plot
+    fig.add_trace(
+        go.Scatter(
+            x=df['ACTUAL_ATTENDANCE_RATE'],
+            y=df['MOVING_AVG_4WEEK_FORECAST'],
+            mode='markers',
+            name='4-Week MA',
+            marker=dict(
+                color=df['MA_APE'],
+                colorscale='RdYlBu_r',
+                size=8,
+                colorbar=dict(title="MAPE (%)", x=1.02),
+                opacity=0.7
+            ),
+            text=df.apply(lambda row: f"Week: {row['WEEK_BEGIN'].strftime('%Y-%m-%d')}<br>MAPE: {row['MA_APE']:.2f}%", axis=1),
+            hovertemplate="<b>%{text}</b><br>Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
+        ),
+        row=1, col=2
+    )
+    
+    # Add perfect prediction lines (y=x)
+    min_val = df['ACTUAL_ATTENDANCE_RATE'].min()
+    max_val = df['ACTUAL_ATTENDANCE_RATE'].max()
+    
+    for col in [1, 2]:
+        fig.add_trace(
+            go.Scatter(
+                x=[min_val, max_val],
+                y=[min_val, max_val],
+                mode='lines',
+                name='Perfect Prediction',
+                line=dict(color='red', dash='dash', width=2),
+                showlegend=(col == 1)
+            ),
+            row=1, col=col
+        )
+    
+    # Update layout
+    fig.update_xaxes(title_text="Actual Attendance Rate (%)")
+    fig.update_yaxes(title_text="Predicted Attendance Rate (%)")
+    
+    fig.update_layout(
+        height=600,
+        title_text="📊 FORECAST ACCURACY WITH MAPE COLOR CODING",
+        showlegend=True
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Correlation analysis
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        greykite_corr = df['ACTUAL_ATTENDANCE_RATE'].corr(df['GREYKITE_FORECAST'])
+        st.metric("🎯 Greykite Correlation", f"{greykite_corr:.3f}")
+        
+        greykite_rmse = np.sqrt(df['GREYKITE_SE'].mean())
+        st.metric("📊 Greykite RMSE", f"{greykite_rmse:.2f}%")
+    
+    with col2:
+        ma_corr = df['ACTUAL_ATTENDANCE_RATE'].corr(df['MOVING_AVG_4WEEK_FORECAST'])
+        st.metric("📈 MA Correlation", f"{ma_corr:.3f}")
+        
+        ma_rmse = np.sqrt(df['MA_SE'].mean())
+        st.metric("📊 MA RMSE", f"{ma_rmse:.2f}%")
 
 def main():
     """Main dashboard application."""
@@ -920,13 +891,13 @@ def main():
     create_outliers_table(filtered_df)
     st.markdown("---")
     
-    create_performance_timeline(filtered_df)
+    create_weekly_mape_trends(filtered_df)
     st.markdown("---")
     
-    create_segment_analysis(filtered_df)
+    create_large_error_analysis(filtered_df)
     st.markdown("---")
     
-    create_error_analysis(filtered_df)
+    create_forecast_accuracy_chart(filtered_df)
     
     # Enhanced Footer
     st.markdown("---")
