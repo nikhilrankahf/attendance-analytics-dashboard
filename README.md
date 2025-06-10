@@ -1,15 +1,22 @@
 # 🎯 Advanced Attendance Analytics Dashboard
 
-A comprehensive Streamlit dashboard for analyzing Greykite vs Moving Average forecast performance.
+A comprehensive Streamlit dashboard for analyzing Greykite vs Moving Average forecast performance with **MAPE-focused analysis**.
 
 ## 📊 Features
 
-- **Executive Performance Summary**: Key insights and trends
+- **Executive Performance Summary**: Key insights and trends with MAPE highlights
 - **Enhanced KPI Metrics**: Win rates, MAPE improvements, and performance indicators
-- **Outliers Analysis**: Comprehensive table with IQR-based detection
-- **Weekly MAPE Trends**: Comparative analysis of Greykite vs 4-week moving average
-- **Large Error Analysis**: Deep dive into forecasting errors ≥6%
-- **Forecast Accuracy**: Actual vs predicted analysis with correlation metrics
+- **MAPE-Focused Outliers Analysis**: Segment-based MAPE analysis instead of individual APE values
+- **Performance Timeline**: MAPE trends over time with comprehensive visualizations
+- **Segment MAPE Analysis**: MAPE performance by location and department with improvement calculations
+- **Comprehensive MAPE Summary**: Statistical analysis, best/worst performance insights, and model consistency metrics
+
+## 🔄 Recent Updates (v2.0)
+
+✅ **MAPE Focus**: All sections now emphasize MAPE (Mean Absolute Percentage Error) instead of individual APE values  
+✅ **Enhanced Outliers Section**: Shows MAPE by segments with outlier impact analysis  
+✅ **Improved Segment Analysis**: MAPE comparison charts with summary tables  
+✅ **Statistical MAPE Summary**: Comprehensive MAPE analysis with performance insights
 
 ## 🚀 Quick Start
 
