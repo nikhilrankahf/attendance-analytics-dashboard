@@ -183,7 +183,6 @@ def load_data():
         
         # Performance indicators
         df['GREYKITE_WINS'] = (df['GREYKITE_ABS_ERROR'] < df['MA_ABS_ERROR']).astype(int)
-        df['PERFORMANCE_IMPROVEMENT'] = ((df['MA_ABS_ERROR'] - df['GREYKITE_ABS_ERROR']) / df['MA_ABS_ERROR']) * 100
         
         # Outlier detection (using IQR method)
         for col in ['GREYKITE_APE', 'MA_APE']:
@@ -232,33 +231,6 @@ def create_filters(df):
         help="Choose which years to include in analysis"
     )
     
-    # Date range filter
-    min_date = df['WEEK_BEGIN'].min().date()
-    max_date = df['WEEK_BEGIN'].max().date()
-    
-    date_range = st.sidebar.date_input(
-        "📆 Date Range",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date,
-        help="Select custom date range for analysis"
-    )
-    
-    if len(date_range) == 2:
-        filters['start_date'] = pd.to_datetime(date_range[0])
-        filters['end_date'] = pd.to_datetime(date_range[1])
-    else:
-        filters['start_date'] = pd.to_datetime(min_date)
-        filters['end_date'] = pd.to_datetime(max_date)
-    
-    # Quarter filter
-    available_quarters = sorted(df['QUARTER_NAME'].unique())
-    filters['quarters'] = st.sidebar.multiselect(
-        "📊 Select Quarters",
-        options=available_quarters,
-        default=available_quarters,
-        help="Filter by specific quarters"
-    )
     
     # Location filter
     available_locations = sorted(df['WORK_LOCATION'].unique())
@@ -290,7 +262,7 @@ def create_filters(df):
     # Performance filter
     filters['performance'] = st.sidebar.selectbox(
         "🎯 Performance Filter",
-        options=["All Data", "Greykite Wins Only", "MA Wins Only", "Close Performance (±5%)"],
+        options=["All Data", "Greykite Wins Only", "MA Wins Only"],
         help="Filter data based on model performance"
     )
     
@@ -308,15 +280,6 @@ def apply_filters(df, filters):
     if filters['years']:
         filtered_df = filtered_df[filtered_df['YEAR'].isin(filters['years'])]
     
-    # Apply date range filter
-    filtered_df = filtered_df[
-        (filtered_df['WEEK_BEGIN'] >= filters['start_date']) & 
-        (filtered_df['WEEK_BEGIN'] <= filters['end_date'])
-    ]
-    
-    # Apply quarter filter
-    if filters['quarters']:
-        filtered_df = filtered_df[filtered_df['QUARTER_NAME'].isin(filters['quarters'])]
     
     # Apply location filter
     if filters['locations']:
@@ -335,8 +298,6 @@ def apply_filters(df, filters):
         filtered_df = filtered_df[filtered_df['GREYKITE_WINS'] == 1]
     elif filters['performance'] == "MA Wins Only":
         filtered_df = filtered_df[filtered_df['GREYKITE_WINS'] == 0]
-    elif filters['performance'] == "Close Performance (±5%)":
-        filtered_df = filtered_df[abs(filtered_df['PERFORMANCE_IMPROVEMENT']) <= 5]
     
     return filtered_df
 
@@ -457,8 +418,8 @@ def create_enhanced_kpi_metrics(df):
     avg_ma_mape = df['MA_APE'].mean()
     mape_improvement = ((avg_ma_mape - avg_greykite_mape) / avg_ma_mape) * 100 if avg_ma_mape != 0 else 0
     
-    # Create enhanced 3-column metrics display
-    col1, col2, col3 = st.columns(3)
+    # Create enhanced 2-column metrics display
+    col1, col2 = st.columns(2)
     
     with col1:
         st.metric(
@@ -469,14 +430,6 @@ def create_enhanced_kpi_metrics(df):
         )
     
     with col2:
-        st.metric(
-            "📈 MAPE Improvement",
-            f"{mape_improvement:.2f}%",
-            delta="vs Moving Average",
-            help="Mean Absolute Percentage Error improvement over Moving Average baseline"
-        )
-    
-    with col3:
         st.metric(
             "🎯 Greykite MAPE",
             f"{avg_greykite_mape:.2f}%",
@@ -596,17 +549,15 @@ def create_weekly_mape_trends(df):
     weekly_data = df.groupby('WEEK_BEGIN').agg({
         'GREYKITE_APE': 'mean',  # Weekly MAPE
         'MA_APE': 'mean',        # Weekly MAPE
-        'GREYKITE_WINS': 'mean',
-        'PERFORMANCE_IMPROVEMENT': 'mean'
+        'GREYKITE_WINS': 'mean'
     }).reset_index()
     
-    weekly_data.columns = ['WEEK_BEGIN', 'GREYKITE_MAPE', 'MA_MAPE', 'WIN_RATE', 'IMPROVEMENT']
+    weekly_data.columns = ['WEEK_BEGIN', 'GREYKITE_MAPE', 'MA_MAPE', 'WIN_RATE']
     
     # Create the main chart
     fig = make_subplots(
         rows=2, cols=1,
         subplot_titles=("Weekly MAPE Comparison", "Weekly Win Rate"),
-        specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
         vertical_spacing=0.1
     )
     
@@ -635,18 +586,7 @@ def create_weekly_mape_trends(df):
         row=1, col=1
     )
     
-    # Add performance improvement on secondary y-axis
-    fig.add_trace(
-        go.Scatter(
-            x=weekly_data['WEEK_BEGIN'],
-            y=weekly_data['IMPROVEMENT'],
-            mode='lines',
-            name='Performance Improvement (%)',
-            line=dict(color='#2ca02c', width=2, dash='dot'),
-            yaxis='y2'
-        ),
-        row=1, col=1, secondary_y=True
-    )
+
     
     # Win rate chart
     fig.add_trace(
@@ -665,7 +605,6 @@ def create_weekly_mape_trends(df):
     # Update layout
     fig.update_xaxes(title_text="Week", row=2, col=1)
     fig.update_yaxes(title_text="MAPE (%)", row=1, col=1)
-    fig.update_yaxes(title_text="Improvement (%)", secondary_y=True, row=1, col=1)
     fig.update_yaxes(title_text="Win Rate (%)", row=2, col=1)
     
     fig.update_layout(
@@ -677,7 +616,7 @@ def create_weekly_mape_trends(df):
     st.plotly_chart(fig, use_container_width=True)
     
     # Summary statistics
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         avg_greykite_mape = weekly_data['GREYKITE_MAPE'].mean()
         st.metric("📊 Avg Weekly Greykite MAPE", f"{avg_greykite_mape:.2f}%")
@@ -689,10 +628,6 @@ def create_weekly_mape_trends(df):
     with col3:
         avg_win_rate = weekly_data['WIN_RATE'].mean() * 100
         st.metric("🏆 Avg Win Rate", f"{avg_win_rate:.1f}%")
-    
-    with col4:
-        avg_improvement = weekly_data['IMPROVEMENT'].mean()
-        st.metric("🎯 Avg Improvement", f"{avg_improvement:.2f}%")
 
 def create_large_error_analysis(df):
     """Create large error analysis focusing on MAPE >= 6%."""
