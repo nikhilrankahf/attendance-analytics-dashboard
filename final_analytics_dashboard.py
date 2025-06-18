@@ -135,7 +135,7 @@ st.markdown("""
 
 @st.cache_data
 def load_data():
-    """Load and process the attendance forecast data with enhanced preprocessing."""
+    """Load and process the attendance forecast data with all 4 models."""
     try:
         # Load the specific CSV file
         df = pd.read_csv('attendance_forecast_results_20250609_191409.csv')
@@ -161,35 +161,51 @@ def load_data():
         df['MONTH_NAME'] = df['WEEK_BEGIN'].dt.month_name()
         df['QUARTER_NAME'] = 'Q' + df['QUARTER'].astype(str) + ' ' + df['YEAR'].astype(str)
         
-        # Compute errors and metrics
-        df['GREYKITE_ERROR'] = df['GREYKITE_FORECAST'] - df['ACTUAL_ATTENDANCE_RATE']
-        df['MA_ERROR'] = df['MOVING_AVG_4WEEK_FORECAST'] - df['ACTUAL_ATTENDANCE_RATE']
+        # Define all 4 forecasting models
+        models = {
+            'GREYKITE': 'GREYKITE_FORECAST',
+            'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST', 
+            'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
+            'EXP_SMOOTH': 'EXPONENTIAL_SMOOTHING'
+        }
         
-        # Absolute errors
-        df['GREYKITE_ABS_ERROR'] = np.abs(df['GREYKITE_ERROR'])
-        df['MA_ABS_ERROR'] = np.abs(df['MA_ERROR'])
+        # Compute errors and metrics for ALL 4 models
+        for model_name, forecast_col in models.items():
+            if forecast_col in df.columns:
+                # Basic errors
+                df[f'{model_name}_ERROR'] = df[forecast_col] - df['ACTUAL_ATTENDANCE_RATE']
+                df[f'{model_name}_ABS_ERROR'] = np.abs(df[f'{model_name}_ERROR'])
+                
+                # Weekly MAPE calculation: |Forecast - Actual| / |Actual| * 100 for each individual week
+                df[f'{model_name}_WEEKLY_MAPE'] = np.abs(df[f'{model_name}_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
+                df[f'{model_name}_WEEKLY_MAPE'] = df[f'{model_name}_WEEKLY_MAPE'].replace([np.inf, -np.inf], np.nan)
+                
+                # Keep APE column for backward compatibility (same as WEEKLY_MAPE)
+                df[f'{model_name}_APE'] = df[f'{model_name}_WEEKLY_MAPE']
+                
+                # Squared errors for MSE/RMSE
+                df[f'{model_name}_SE'] = df[f'{model_name}_ERROR'] ** 2
+                
+                # Outlier detection (using IQR method on weekly MAPE)
+                Q1 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.25)
+                Q3 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.75)
+                IQR = Q3 - Q1
+                df[f'{model_name}_APE_OUTLIER'] = ((df[f'{model_name}_WEEKLY_MAPE'] < (Q1 - 1.5 * IQR)) | 
+                                                   (df[f'{model_name}_WEEKLY_MAPE'] > (Q3 + 1.5 * IQR))).astype(int)
         
-        # Percentage errors (APE values for MAPE calculation)
-        df['GREYKITE_APE'] = np.abs(df['GREYKITE_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
-        df['MA_APE'] = np.abs(df['MA_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
+        # Performance comparison - find best model for each row
+        available_models = [model for model in models.keys() if f'{model}_ABS_ERROR' in df.columns]
+        if available_models:
+            error_cols = [f'{model}_ABS_ERROR' for model in available_models]
+            df['BEST_MODEL'] = df[error_cols].idxmin(axis=1).str.replace('_ABS_ERROR', '')
+            
+            # Create win indicators for each model
+            for model in available_models:
+                df[f'{model}_WINS'] = (df['BEST_MODEL'] == model).astype(int)
         
-        # Replace infinite values
-        df['GREYKITE_APE'] = df['GREYKITE_APE'].replace([np.inf, -np.inf], np.nan)
-        df['MA_APE'] = df['MA_APE'].replace([np.inf, -np.inf], np.nan)
-        
-        # Squared errors for MSE/RMSE
-        df['GREYKITE_SE'] = df['GREYKITE_ERROR'] ** 2
-        df['MA_SE'] = df['MA_ERROR'] ** 2
-        
-        # Performance indicators
-        df['GREYKITE_WINS'] = (df['GREYKITE_ABS_ERROR'] < df['MA_ABS_ERROR']).astype(int)
-        
-        # Outlier detection (using IQR method)
-        for col in ['GREYKITE_APE', 'MA_APE']:
-            Q1 = df[col].quantile(0.25)
-            Q3 = df[col].quantile(0.75)
-            IQR = Q3 - Q1
-            df[f'{col}_OUTLIER'] = ((df[col] < (Q1 - 1.5 * IQR)) | (df[col] > (Q3 + 1.5 * IQR))).astype(int)
+        # Legacy columns for backward compatibility (keep existing Greykite vs MA comparison)
+        if 'GREYKITE_ABS_ERROR' in df.columns and 'MA_4WEEK_ABS_ERROR' in df.columns:
+            df['GREYKITE_WINS'] = (df['GREYKITE_ABS_ERROR'] < df['MA_4WEEK_ABS_ERROR']).astype(int)
         
         return df
         
@@ -217,87 +233,148 @@ def create_header():
     """, unsafe_allow_html=True)
 
 def create_filters(df):
-    """Create comprehensive sidebar filters."""
-    st.sidebar.markdown("### 🎛️ DASHBOARD FILTERS")
-    
-    filters = {}
+    """Create enhanced sidebar filters for all dashboard controls."""
+    st.sidebar.markdown("## 🎛️ DASHBOARD CONTROLS")
     
     # Year filter
-    available_years = sorted(df['YEAR'].unique())
-    filters['years'] = st.sidebar.multiselect(
+    years = sorted(df['YEAR'].unique())
+    selected_years = st.sidebar.multiselect(
         "📅 Select Years",
-        options=available_years,
-        default=available_years,
-        help="Choose which years to include in analysis"
+        years,
+        default=years,
+        help="Filter data by specific years"
     )
     
-    
     # Location filter
-    available_locations = sorted(df['WORK_LOCATION'].unique())
-    filters['locations'] = st.sidebar.multiselect(
-        "🏢 Work Locations",
-        options=available_locations,
-        default=available_locations,
-        help="Select specific work locations"
+    locations = sorted(df['WORK_LOCATION'].unique())
+    selected_locations = st.sidebar.multiselect(
+        "🏢 Select Locations",
+        locations,
+        default=locations,
+        help="Filter data by work locations"
     )
     
     # Department filter
-    available_departments = sorted(df['DEPARTMENT_GROUP'].unique())
-    filters['departments'] = st.sidebar.multiselect(
-        "🏭 Department Groups",
-        options=available_departments,
-        default=available_departments,
-        help="Choose department groups to analyze"
+    departments = sorted(df['DEPARTMENT_GROUP'].unique())
+    selected_departments = st.sidebar.multiselect(
+        "🏭 Select Departments",
+        departments,
+        default=departments,
+        help="Filter data by department groups"
     )
     
     # Shift filter
-    available_shifts = sorted(df['SHIFT_TIME'].unique())
-    filters['shifts'] = st.sidebar.multiselect(
-        "⏰ Shift Times",
-        options=available_shifts,
-        default=available_shifts,
-        help="Filter by specific shift times"
+    shifts = sorted(df['SHIFT_TIME'].unique())
+    selected_shifts = st.sidebar.multiselect(
+        "⏰ Select Shifts",
+        shifts,
+        default=shifts,
+        help="Filter data by shift times"
     )
+    
+    # Model comparison filter
+    st.sidebar.markdown("### 🎯 Model Comparison")
+    model_options = [
+        'All Models Overview',
+        'Greykite vs 4-Week MA', 
+        'Greykite vs 6-Week MA',
+        'Greykite vs Exp. Smoothing',
+        'Moving Average Comparison',
+        'Best vs Worst Performance',
+        'Individual Model Focus'
+    ]
+    selected_comparison = st.sidebar.selectbox(
+        "Select Comparison Type",
+        model_options,
+        help="Choose how to compare the forecasting models"
+    )
+    
+    # Individual model focus (if selected)
+    focus_model = None
+    if selected_comparison == 'Individual Model Focus':
+        model_focus_options = ['Greykite', '4-Week MA', '6-Week MA', 'Exp. Smoothing']
+        focus_model = st.sidebar.selectbox(
+            "Focus on Model",
+            model_focus_options,
+            help="Select a specific model to analyze in detail"
+        )
     
     # Performance filter
-    filters['performance'] = st.sidebar.selectbox(
-        "🎯 Performance Filter",
-        options=["All Data", "Greykite Wins Only", "MA Wins Only"],
-        help="Filter data based on model performance"
+    performance_options = ["All Data", "High Performance (MAPE < 3%)", "Medium Performance (3% ≤ MAPE < 6%)", "Low Performance (MAPE ≥ 6%)"]
+    selected_performance = st.sidebar.selectbox(
+        "📊 Performance Filter",
+        performance_options,
+        help="Filter data by forecast accuracy levels"
     )
     
-    # Reset filters button
-    if st.sidebar.button("🔄 Reset All Filters", help="Reset all filters to default values"):
-        st.experimental_rerun()
+    # Date range filter
+    st.sidebar.markdown("### 📆 Date Range")
+    min_date = df['WEEK_BEGIN'].min().date()
+    max_date = df['WEEK_BEGIN'].max().date()
     
-    return filters
+    date_range = st.sidebar.date_input(
+        "Select Date Range",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date,
+        help="Filter data by specific date range"
+    )
+    
+    return {
+        'years': selected_years,
+        'locations': selected_locations,
+        'departments': selected_departments,
+        'shifts': selected_shifts,
+        'comparison': selected_comparison,
+        'focus_model': focus_model,
+        'performance': selected_performance,
+        'date_range': date_range
+    }
 
 def apply_filters(df, filters):
-    """Apply selected filters to the dataframe."""
+    """Apply all selected filters to the dataframe."""
     filtered_df = df.copy()
     
-    # Apply year filter
+    # Apply basic filters
     if filters['years']:
         filtered_df = filtered_df[filtered_df['YEAR'].isin(filters['years'])]
     
-    
-    # Apply location filter
     if filters['locations']:
         filtered_df = filtered_df[filtered_df['WORK_LOCATION'].isin(filters['locations'])]
     
-    # Apply department filter
     if filters['departments']:
         filtered_df = filtered_df[filtered_df['DEPARTMENT_GROUP'].isin(filters['departments'])]
     
-    # Apply shift filter
     if filters['shifts']:
         filtered_df = filtered_df[filtered_df['SHIFT_TIME'].isin(filters['shifts'])]
     
-    # Apply performance filter
-    if filters['performance'] == "Greykite Wins Only":
-        filtered_df = filtered_df[filtered_df['GREYKITE_WINS'] == 1]
-    elif filters['performance'] == "MA Wins Only":
-        filtered_df = filtered_df[filtered_df['GREYKITE_WINS'] == 0]
+    # Apply date range filter
+    if len(filters['date_range']) == 2:
+        start_date, end_date = filters['date_range']
+        filtered_df = filtered_df[
+            (filtered_df['WEEK_BEGIN'].dt.date >= start_date) &
+            (filtered_df['WEEK_BEGIN'].dt.date <= end_date)
+        ]
+    
+    # Apply performance filter based on best available model
+    if filters['performance'] != "All Data":
+        # Find the best performing model for each row to determine performance level
+        available_models = ['GREYKITE', 'MA_4WEEK', 'MA_6WEEK', 'EXP_SMOOTH']
+        ape_cols = [f'{model}_APE' for model in available_models if f'{model}_APE' in filtered_df.columns]
+        
+        if ape_cols:
+            # Get minimum MAPE for each row across all models
+            filtered_df['MIN_MAPE'] = filtered_df[ape_cols].min(axis=1)
+            
+            if filters['performance'] == "High Performance (MAPE < 3%)":
+                filtered_df = filtered_df[filtered_df['MIN_MAPE'] < 3]
+            elif filters['performance'] == "Medium Performance (3% ≤ MAPE < 6%)":
+                filtered_df = filtered_df[(filtered_df['MIN_MAPE'] >= 3) & (filtered_df['MIN_MAPE'] < 6)]
+            elif filters['performance'] == "Low Performance (MAPE ≥ 6%)":
+                filtered_df = filtered_df[filtered_df['MIN_MAPE'] >= 6]
+            
+            # Remove the temporary column
+            filtered_df = filtered_df.drop('MIN_MAPE', axis=1)
     
     return filtered_df
 
@@ -400,234 +477,469 @@ def create_executive_summary(df):
     """, unsafe_allow_html=True)
 
 def create_enhanced_kpi_metrics(df):
-    """Create enhanced 3-column KPI metrics dashboard with superior styling."""
-    st.markdown("### 📊 KEY PERFORMANCE INDICATORS")
+    """Create enhanced 4-model comparison KPI metrics dashboard."""
+    st.markdown("### 📊 MODEL PERFORMANCE COMPARISON")
     st.markdown('<div class="kpi-section">', unsafe_allow_html=True)
     
     if len(df) == 0:
         st.warning("⚠️ No data available for the selected filters.")
         return
     
-    # Calculate core metrics
+    # Define models and their display names
+    models = {
+        'GREYKITE': 'Greykite',
+        'MA_4WEEK': '4-Week MA',
+        'MA_6WEEK': '6-Week MA',
+        'EXP_SMOOTH': 'Exp. Smoothing'
+    }
+    
+    # Calculate metrics for each available model
+    metrics = {}
     total_weeks = len(df)
-    greykite_wins = df['GREYKITE_WINS'].sum()
-    win_rate = (greykite_wins / total_weeks) * 100 if total_weeks > 0 else 0
     
-    # MAPE metrics
-    avg_greykite_mape = df['GREYKITE_APE'].mean()
-    avg_ma_mape = df['MA_APE'].mean()
-    mape_improvement = ((avg_ma_mape - avg_greykite_mape) / avg_ma_mape) * 100 if avg_ma_mape != 0 else 0
+    for model_code, model_name in models.items():
+        if f'{model_code}_APE' in df.columns:
+            mape = df[f'{model_code}_APE'].mean()
+            rmse = np.sqrt(df[f'{model_code}_SE'].mean())
+            win_rate = (df[f'{model_code}_WINS'].sum() / total_weeks) * 100 if f'{model_code}_WINS' in df.columns else 0
+            
+            metrics[model_code] = {
+                'name': model_name,
+                'MAPE': mape,
+                'RMSE': rmse,
+                'WIN_RATE': win_rate,
+                'WINS': df[f'{model_code}_WINS'].sum() if f'{model_code}_WINS' in df.columns else 0
+            }
     
-    # Create enhanced 2-column metrics display
-    col1, col2 = st.columns(2)
+    if not metrics:
+        st.warning("⚠️ No model performance data available.")
+        return
     
-    with col1:
-        st.metric(
-            "🏆 Greykite Win Rate",
-            f"{win_rate:.1f}%",
-            delta=f"{greykite_wins}/{total_weeks} weeks",
-            help="Percentage of weeks where Greykite outperformed Moving Average forecasts"
-        )
+    # Display metrics in columns based on available models
+    available_models = list(metrics.keys())
+    cols = st.columns(len(available_models))
     
-    with col2:
-        st.metric(
-            "🎯 Greykite MAPE",
-            f"{avg_greykite_mape:.2f}%",
-            delta=f"MA: {avg_ma_mape:.2f}%",
-            help="Average Mean Absolute Percentage Error for Greykite forecasting model"
-        )
+    # Color scheme for different models
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    
+    for i, (model_code, model_data) in enumerate(metrics.items()):
+        with cols[i]:
+            st.metric(
+                f"🎯 {model_data['name']}",
+                f"Avg Weekly MAPE: {model_data['MAPE']:.2f}%",
+                delta=f"Wins: {model_data['WINS']}/{total_weeks} ({model_data['WIN_RATE']:.1f}%)",
+                help=f"RMSE: {model_data['RMSE']:.2f}% | Individual week MAPE values averaged"
+            )
+    
+    # Overall ranking section
+    st.markdown("### 🏆 MODEL RANKING")
+    
+    # Rank by MAPE (lower is better)
+    ranking = sorted(metrics.items(), key=lambda x: x[1]['MAPE'])
+    
+    rank_col1, rank_col2 = st.columns(2)
+    
+    with rank_col1:
+        st.markdown("**📈 By Avg Weekly MAPE (Lower = Better)**")
+        for i, (model_code, data) in enumerate(ranking):
+            medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "🔸"
+            st.markdown(f"{medal} **{i+1}. {data['name']}** - {data['MAPE']:.2f}%")
+    
+    with rank_col2:
+        st.markdown("**🏆 By Win Rate (Higher = Better)**")
+        win_ranking = sorted(metrics.items(), key=lambda x: x[1]['WIN_RATE'], reverse=True)
+        for i, (model_code, data) in enumerate(win_ranking):
+            medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "🔸"
+            st.markdown(f"{medal} **{i+1}. {data['name']}** - {data['WIN_RATE']:.1f}%")
+    
+    # Performance insights
+    if len(metrics) >= 2:
+        best_model = ranking[0]
+        worst_model = ranking[-1]
+        
+        improvement = ((worst_model[1]['MAPE'] - best_model[1]['MAPE']) / worst_model[1]['MAPE']) * 100
+        
+        st.markdown("### 📊 KEY INSIGHTS")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "🏆 Best Model",
+                best_model[1]['name'],
+                delta=f"{best_model[1]['MAPE']:.2f}% Avg Weekly MAPE"
+            )
+        
+        with col2:
+            st.metric(
+                "📈 Performance Gap",
+                f"{improvement:.1f}%",
+                delta=f"{worst_model[1]['MAPE'] - best_model[1]['MAPE']:.2f}pp"
+            )
+        
+        with col3:
+            total_wins = sum(data['WINS'] for data in metrics.values())
+            st.metric(
+                "📊 Total Comparisons",
+                f"{total_weeks}",
+                delta=f"{total_wins} decisive wins"
+            )
     
     st.markdown('</div>', unsafe_allow_html=True)
 
 def create_outliers_table(df):
-    """Create comprehensive outliers analysis table."""
-    st.markdown("### 🚨 OUTLIERS ANALYSIS")
+    """Create comprehensive outliers analysis for all 4 models."""
+    st.markdown("### 🚨 OUTLIERS ANALYSIS - ALL MODELS")
     
     if len(df) == 0:
         st.warning("⚠️ No data available for the selected filters.")
         return
     
-    # Get outliers based on both Greykite and MA APE
-    outliers_df = df[
-        (df['GREYKITE_APE_OUTLIER'] == 1) | (df['MA_APE_OUTLIER'] == 1)
-    ].copy()
+    # Define models and their forecast columns
+    models_config = {
+        'GREYKITE': {'name': 'Greykite', 'forecast_col': 'GREYKITE_FORECAST'},
+        'MA_4WEEK': {'name': '4-Week MA', 'forecast_col': 'MOVING_AVG_4WEEK_FORECAST'},
+        'MA_6WEEK': {'name': '6-Week MA', 'forecast_col': 'SIX_WEEK_ROLLING_AVG'},
+        'EXP_SMOOTH': {'name': 'Exp. Smoothing', 'forecast_col': 'EXPONENTIAL_SMOOTHING'}
+    }
+    
+    # Get outliers for any available model
+    outlier_conditions = []
+    available_models = []
+    
+    for model_code, config in models_config.items():
+        outlier_col = f'{model_code}_APE_OUTLIER'
+        if outlier_col in df.columns:
+            outlier_conditions.append(df[outlier_col] == 1)
+            available_models.append(model_code)
+    
+    if not outlier_conditions:
+        st.warning("⚠️ No outlier data available for analysis.")
+        return
+    
+    # Combine all outlier conditions
+    outliers_mask = pd.concat(outlier_conditions, axis=1).any(axis=1)
+    outliers_df = df[outliers_mask].copy()
     
     if len(outliers_df) == 0:
         st.info("✅ No outliers detected in the current filtered dataset.")
         return
     
-    # Prepare outliers table with requested columns
-    outliers_display = outliers_df[[
-        'WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'SHIFT_TIME',
-        'ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST',
-        'GREYKITE_APE', 'MA_APE', 'GREYKITE_APE_OUTLIER', 'MA_APE_OUTLIER'
-    ]].copy()
+    # Summary metrics by model
+    st.markdown("### 📊 OUTLIER SUMMARY BY MODEL")
     
-    # Format the data for better display (keep WEEK_NUMBER as-is)
-    outliers_display['ACTUAL_ATTENDANCE_RATE'] = outliers_display['ACTUAL_ATTENDANCE_RATE'].round(2)
-    outliers_display['GREYKITE_FORECAST'] = outliers_display['GREYKITE_FORECAST'].round(2)
-    outliers_display['MOVING_AVG_4WEEK_FORECAST'] = outliers_display['MOVING_AVG_4WEEK_FORECAST'].round(2)
-    outliers_display['GREYKITE_APE'] = outliers_display['GREYKITE_APE'].round(2)
-    outliers_display['MA_APE'] = outliers_display['MA_APE'].round(2)
+    cols = st.columns(len(available_models))
+    total_outliers_by_model = {}
     
-    # Rename columns for better readability (displaying as MAPE values)
-    outliers_display.columns = [
-        'Week', 'Location', 'Department', 'Shift',
-        'Actual Attendance (%)', 'Greykite Forecast (%)', '4-Week MA Forecast (%)',
-        'Greykite MAPE (%)', 'MA MAPE (%)', 'Greykite Outlier', 'MA Outlier'
-    ]
+    for i, model_code in enumerate(available_models):
+        config = models_config[model_code]
+        outlier_col = f'{model_code}_APE_OUTLIER'
+        outlier_count = df[outlier_col].sum()
+        total_outliers_by_model[model_code] = outlier_count
+        
+        with cols[i]:
+            st.metric(
+                f"🚨 {config['name']}",
+                f"{outlier_count} outliers",
+                delta=f"{(outlier_count/len(df)*100):.1f}% of data"
+            )
+    
+    # Detailed outliers table
+    st.markdown("### 📋 DETAILED OUTLIERS INFORMATION")
+    
+    # Prepare display columns
+    base_columns = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'SHIFT_TIME', 'ACTUAL_ATTENDANCE_RATE']
+    
+    # Add forecast and MAPE columns for available models
+    display_columns = base_columns.copy()
+    for model_code in available_models:
+        config = models_config[model_code]
+        forecast_col = config['forecast_col']
+        mape_col = f'{model_code}_APE'
+        
+        if forecast_col in df.columns:
+            display_columns.extend([forecast_col, mape_col])
     
     # Create outlier type indicator
-    outliers_display['Outlier Type'] = outliers_display.apply(
-        lambda row: 'Both Models' if (row['Greykite Outlier'] == 1 and row['MA Outlier'] == 1)
-        else 'Greykite Only' if row['Greykite Outlier'] == 1
-        else 'MA Only', axis=1
-    )
+    outliers_display = outliers_df[display_columns].copy()
     
-    # Display summary metrics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("🚨 Total Outliers", len(outliers_display))
-    with col2:
-        greykite_outliers = len(outliers_display[outliers_display['Greykite Outlier'] == 1])
-        st.metric("🎯 Greykite Outliers", greykite_outliers)
-    with col3:
-        ma_outliers = len(outliers_display[outliers_display['MA Outlier'] == 1])
-        st.metric("📊 MA Outliers", ma_outliers)
+    # Add outlier type column
+    def get_outlier_type(row):
+        outlier_models = []
+        for model_code in available_models:
+            outlier_col = f'{model_code}_APE_OUTLIER'
+            if outlier_col in row and row[outlier_col] == 1:
+                outlier_models.append(models_config[model_code]['name'])
+        return ', '.join(outlier_models) if outlier_models else 'None'
     
-    st.markdown("""
-    <div class="outlier-table">
-    <h4>📋 Detailed Outliers Information</h4>
-    <p><strong>Note:</strong> Outliers are detected using the IQR method (values beyond Q1 - 1.5×IQR or Q3 + 1.5×IQR). MAPE values shown represent individual week performance.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    outliers_display['Outlier_Models'] = outliers_df.apply(get_outlier_type, axis=1)
     
-    # Display the enhanced table
-    display_columns = [
-        'Week', 'Location', 'Department', 'Shift', 'Outlier Type',
-        'Actual Attendance (%)', 'Greykite Forecast (%)', '4-Week MA Forecast (%)',
-        'Greykite MAPE (%)', 'MA MAPE (%)'
-    ]
+    # Format numerical columns
+    for col in outliers_display.columns:
+        if col in ['ACTUAL_ATTENDANCE_RATE'] or any(forecast_col in col for forecast_col in [config['forecast_col'] for config in models_config.values()]):
+            outliers_display[col] = outliers_display[col].round(2)
+        elif '_APE' in col:
+            outliers_display[col] = outliers_display[col].round(2)
     
+    # Rename columns for better display
+    column_renames = {
+        'WEEK_NUMBER': 'Week',
+        'WORK_LOCATION': 'Location',
+        'DEPARTMENT_GROUP': 'Department',
+        'SHIFT_TIME': 'Shift',
+        'ACTUAL_ATTENDANCE_RATE': 'Actual (%)',
+        'Outlier_Models': 'Outlier in Models'
+    }
+    
+    for model_code in available_models:
+        config = models_config[model_code]
+        forecast_col = config['forecast_col']
+        mape_col = f'{model_code}_APE'
+        
+        if forecast_col in outliers_display.columns:
+            column_renames[forecast_col] = f"{config['name']} Forecast (%)"
+        if mape_col in outliers_display.columns:
+            column_renames[mape_col] = f"{config['name']} Weekly MAPE (%)"
+    
+    outliers_display = outliers_display.rename(columns=column_renames)
+    
+    # Display the table
     st.dataframe(
-        outliers_display[display_columns].sort_values(['Week', 'Location']),
+        outliers_display.sort_values(['Week', 'Location']),
         use_container_width=True,
-        height=450
+        height=400
     )
     
-    # Additional insights
-    if len(outliers_display) > 0:
-        worst_greykite = outliers_display.loc[outliers_display['Greykite MAPE (%)'].idxmax()]
-        worst_ma = outliers_display.loc[outliers_display['MA MAPE (%)'].idxmax()]
+    # Outlier analysis insights
+    st.markdown("### 🔍 OUTLIER INSIGHTS")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**📊 Outlier Distribution by Model**")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(f"""
-            **🎯 Worst Greykite Performance:**
-            - Week: {worst_greykite['Week']}
-            - Location: {worst_greykite['Location']}
-            - MAPE: {worst_greykite['Greykite MAPE (%)']}%
-            """)
+        # Create a simple bar chart of outlier counts
+        outlier_counts = []
+        model_names = []
         
-        with col2:
-            st.markdown(f"""
-            **📊 Worst MA Performance:**
-            - Week: {worst_ma['Week']}
-            - Location: {worst_ma['Location']}
-            - MAPE: {worst_ma['MA MAPE (%)']}%
-            """)
+        for model_code in available_models:
+            config = models_config[model_code]
+            count = total_outliers_by_model[model_code]
+            outlier_counts.append(count)
+            model_names.append(config['name'])
+        
+        outlier_fig = go.Figure(data=[
+            go.Bar(
+                x=model_names,
+                y=outlier_counts,
+                marker_color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'][:len(model_names)]
+            )
+        ])
+        
+        outlier_fig.update_layout(
+            title="Outlier Count by Model",
+            xaxis_title="Model",
+            yaxis_title="Number of Outliers",
+            height=300
+        )
+        
+        st.plotly_chart(outlier_fig, use_container_width=True)
+    
+    with col2:
+        st.markdown("**🎯 Worst Performing Cases**")
+        
+        # Find worst case for each model
+        for model_code in available_models:
+            config = models_config[model_code]
+            mape_col = f'{model_code}_APE'
+            
+            if mape_col in outliers_df.columns and len(outliers_df) > 0:
+                worst_case = outliers_df.loc[outliers_df[mape_col].idxmax()]
+                st.markdown(f"""
+                **{config['name']}:**
+                - Week: {worst_case.get('WEEK_NUMBER', 'N/A')}
+                - Location: {worst_case.get('WORK_LOCATION', 'N/A')}
+                - Weekly MAPE: {worst_case[mape_col]:.2f}%
+                """)
+    
+    # Common outlier patterns
+    if len(outliers_df) > 0:
+        st.markdown("### 📈 COMMON OUTLIER PATTERNS")
+        
+        pattern_col1, pattern_col2, pattern_col3 = st.columns(3)
+        
+        with pattern_col1:
+            st.markdown("**🏢 Most Problematic Locations**")
+            location_outliers = outliers_df['WORK_LOCATION'].value_counts().head(3)
+            for location, count in location_outliers.items():
+                st.markdown(f"• {location}: {count} outliers")
+        
+        with pattern_col2:
+            st.markdown("**🏭 Most Problematic Departments**")
+            dept_outliers = outliers_df['DEPARTMENT_GROUP'].value_counts().head(3)
+            for dept, count in dept_outliers.items():
+                st.markdown(f"• {dept}: {count} outliers")
+        
+        with pattern_col3:
+            st.markdown("**⏰ Most Problematic Shifts**")
+            shift_outliers = outliers_df['SHIFT_TIME'].value_counts().head(3)
+            for shift, count in shift_outliers.items():
+                st.markdown(f"• {shift}: {count} outliers")
 
 def create_weekly_mape_trends(df):
-    """Create weekly MAPE trends chart."""
-    st.markdown("### 📅 WEEKLY MAPE TRENDS")
+    """Create weekly MAPE trends chart for all 4 models."""
+    st.markdown("### 📅 WEEKLY MAPE TRENDS - ALL MODELS")
+    st.markdown("*Note: Each point represents the average weekly MAPE for that specific week across all locations/departments/shifts*")
     
     if len(df) == 0:
         st.warning("⚠️ No data available for the selected filters.")
         return
     
-    # Prepare weekly aggregated data
-    weekly_data = df.groupby('WEEK_BEGIN').agg({
-        'GREYKITE_APE': 'mean',  # Weekly MAPE
-        'MA_APE': 'mean',        # Weekly MAPE
-        'GREYKITE_WINS': 'mean'
-    }).reset_index()
+    # Define models and their properties
+    models_config = {
+        'GREYKITE': {'name': 'Greykite', 'color': '#1f77b4'},
+        'MA_4WEEK': {'name': '4-Week MA', 'color': '#ff7f0e'},
+        'MA_6WEEK': {'name': '6-Week MA', 'color': '#2ca02c'},
+        'EXP_SMOOTH': {'name': 'Exp. Smoothing', 'color': '#d62728'}
+    }
     
-    weekly_data.columns = ['WEEK_BEGIN', 'GREYKITE_MAPE', 'MA_MAPE', 'WIN_RATE']
+    # Prepare weekly aggregated data for all available models
+    agg_dict = {}
+    available_models = []
     
-    # Create the main chart
+    for model_code, config in models_config.items():
+        if f'{model_code}_APE' in df.columns:
+            agg_dict[f'{model_code}_MAPE'] = df[f'{model_code}_APE'].mean()
+            available_models.append(model_code)
+    
+    if not agg_dict:
+        st.warning("⚠️ No model data available for trend analysis.")
+        return
+    
+    # Add win rate data if available
+    if 'BEST_MODEL' in df.columns:
+        for model_code in available_models:
+            agg_dict[f'{model_code}_WIN_RATE'] = df[f'{model_code}_WINS'].mean() if f'{model_code}_WINS' in df.columns else 0
+    
+    weekly_data = df.groupby('WEEK_BEGIN').agg(agg_dict).reset_index()
+    
+    # Create the main trends chart
     fig = make_subplots(
         rows=2, cols=1,
-        subplot_titles=("Weekly MAPE Comparison", "Weekly Win Rate"),
-        vertical_spacing=0.1
+        subplot_titles=("Weekly MAPE Comparison - All Models", "Weekly Win Rate Distribution"),
+        vertical_spacing=0.15,
+        specs=[[{"secondary_y": False}], [{"secondary_y": False}]]
     )
     
-    # MAPE trends
-    fig.add_trace(
-        go.Scatter(
-            x=weekly_data['WEEK_BEGIN'],
-            y=weekly_data['GREYKITE_MAPE'],
-            mode='lines+markers',
-            name='Greykite MAPE',
-            line=dict(color='#1f77b4', width=3),
-            marker=dict(size=8)
-        ),
-        row=1, col=1
-    )
+    # MAPE trends for all models
+    for model_code in available_models:
+        config = models_config[model_code]
+        mape_col = f'{model_code}_MAPE'
+        
+        if mape_col in weekly_data.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=weekly_data['WEEK_BEGIN'],
+                    y=weekly_data[mape_col],
+                    mode='lines+markers',
+                    name=config['name'],
+                    line=dict(color=config['color'], width=3),
+                    marker=dict(size=8),
+                    hovertemplate=f"<b>{config['name']}</b><br>Week: %{{x}}<br>Weekly MAPE: %{{y:.2f}}%<extra></extra>"
+                ),
+                row=1, col=1
+            )
     
-    fig.add_trace(
-        go.Scatter(
-            x=weekly_data['WEEK_BEGIN'],
-            y=weekly_data['MA_MAPE'],
-            mode='lines+markers',
-            name='4-Week MA MAPE',
-            line=dict(color='#ff7f0e', width=3),
-            marker=dict(size=8)
-        ),
-        row=1, col=1
-    )
-    
-
-    
-    # Win rate chart
-    fig.add_trace(
-        go.Scatter(
-            x=weekly_data['WEEK_BEGIN'],
-            y=weekly_data['WIN_RATE'] * 100,
-            mode='lines+markers',
-            name='Win Rate (%)',
-            line=dict(color='#d62728', width=3),
-            marker=dict(size=8),
-            fill='tonexty'
-        ),
-        row=2, col=1
-    )
+    # Win rate stacked area chart
+    if 'BEST_MODEL' in df.columns:
+        for model_code in available_models:
+            config = models_config[model_code]
+            win_rate_col = f'{model_code}_WIN_RATE'
+            
+            if win_rate_col in weekly_data.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=weekly_data['WEEK_BEGIN'],
+                        y=weekly_data[win_rate_col] * 100,
+                        mode='lines+markers',
+                        name=f"{config['name']} Win Rate",
+                        line=dict(color=config['color'], width=2),
+                        marker=dict(size=6),
+                        fill='tonexty' if model_code != available_models[0] else None,
+                        hovertemplate=f"<b>{config['name']}</b><br>Week: %{{x}}<br>Win Rate: %{{y:.1f}}%<extra></extra>",
+                        showlegend=False
+                    ),
+                    row=2, col=1
+                )
     
     # Update layout
     fig.update_xaxes(title_text="Week", row=2, col=1)
-    fig.update_yaxes(title_text="MAPE (%)", row=1, col=1)
+    fig.update_yaxes(title_text="Weekly MAPE (%)", row=1, col=1)
     fig.update_yaxes(title_text="Win Rate (%)", row=2, col=1)
     
     fig.update_layout(
         height=700,
-        title_text="📊 WEEKLY MAPE PERFORMANCE TRENDS",
-        showlegend=True
+        title_text="📊 COMPREHENSIVE MODEL PERFORMANCE TRENDS",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     
     st.plotly_chart(fig, use_container_width=True)
     
     # Summary statistics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        avg_greykite_mape = weekly_data['GREYKITE_MAPE'].mean()
-        st.metric("📊 Avg Weekly Greykite MAPE", f"{avg_greykite_mape:.2f}%")
+    st.markdown("### 📊 TREND SUMMARY STATISTICS")
     
-    with col2:
-        avg_ma_mape = weekly_data['MA_MAPE'].mean()
-        st.metric("📈 Avg Weekly MA MAPE", f"{avg_ma_mape:.2f}%")
+    summary_cols = st.columns(len(available_models))
     
-    with col3:
-        avg_win_rate = weekly_data['WIN_RATE'].mean() * 100
-        st.metric("🏆 Avg Win Rate", f"{avg_win_rate:.1f}%")
+    for i, model_code in enumerate(available_models):
+        config = models_config[model_code]
+        mape_col = f'{model_code}_MAPE'
+        
+        if mape_col in weekly_data.columns:
+            avg_mape = weekly_data[mape_col].mean()
+            std_mape = weekly_data[mape_col].std()
+            min_mape = weekly_data[mape_col].min()
+            max_mape = weekly_data[mape_col].max()
+            
+            with summary_cols[i]:
+                st.markdown(f"""
+                **🎯 {config['name']}**
+                - Avg Weekly MAPE: {avg_mape:.2f}%
+                - Std Dev: {std_mape:.2f}%
+                - Range: {min_mape:.2f}% - {max_mape:.2f}%
+                """)
+    
+    # Volatility analysis
+    if len(available_models) >= 2:
+        st.markdown("### 📈 MODEL STABILITY ANALYSIS")
+        
+        stability_data = []
+        for model_code in available_models:
+            config = models_config[model_code]
+            mape_col = f'{model_code}_MAPE'
+            
+            if mape_col in weekly_data.columns:
+                volatility = weekly_data[mape_col].std()
+                stability_data.append({
+                    'Model': config['name'],
+                    'Volatility (Std Dev)': volatility,
+                    'Stability Score': 1 / (1 + volatility)  # Higher score = more stable
+                })
+        
+        stability_df = pd.DataFrame(stability_data)
+        stability_df = stability_df.sort_values('Stability Score', ascending=False)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**🏆 Most Stable Model**")
+            most_stable = stability_df.iloc[0]
+            st.success(f"**{most_stable['Model']}** (Volatility: {most_stable['Volatility (Std Dev)']:.2f}%)")
+        
+        with col2:
+            st.markdown("**📊 Stability Ranking**")
+            for i, row in stability_df.iterrows():
+                medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "🔸"
+                st.markdown(f"{medal} {row['Model']}: {row['Volatility (Std Dev)']:.2f}%")
 
 def create_large_error_analysis(df):
     """Create large error analysis focusing on MAPE >= 6%."""
@@ -811,66 +1123,420 @@ def create_forecast_accuracy_chart(df):
         ma_rmse = np.sqrt(df['MA_SE'].mean())
         st.metric("📊 MA RMSE", f"{ma_rmse:.2f}%")
 
+def create_model_comparison_matrix(df):
+    """Create a comprehensive model comparison matrix."""
+    st.markdown("### 🔍 MODEL COMPARISON MATRIX")
+    
+    if len(df) == 0:
+        st.warning("⚠️ No data available for the selected filters.")
+        return
+    
+    # Define models
+    models = {
+        'GREYKITE': 'Greykite',
+        'MA_4WEEK': '4-Week MA',
+        'MA_6WEEK': '6-Week MA',
+        'EXP_SMOOTH': 'Exp. Smoothing'
+    }
+    
+    # Calculate correlation matrix between model forecasts
+    available_models = []
+    forecast_cols = []
+    
+    for model_code, model_name in models.items():
+        forecast_col = f'{model_code}_FORECAST' if model_code == 'GREYKITE' else \
+                      'MOVING_AVG_4WEEK_FORECAST' if model_code == 'MA_4WEEK' else \
+                      'SIX_WEEK_ROLLING_AVG' if model_code == 'MA_6WEEK' else \
+                      'EXPONENTIAL_SMOOTHING'
+        
+        if forecast_col in df.columns:
+            available_models.append(model_name)
+            forecast_cols.append(forecast_col)
+    
+    if len(forecast_cols) >= 2:
+        # Create correlation matrix
+        corr_matrix = df[forecast_cols].corr()
+        corr_matrix.index = available_models
+        corr_matrix.columns = available_models
+        
+        # Display correlation heatmap
+        fig = px.imshow(
+            corr_matrix,
+            text_auto=True,
+            aspect="auto",
+            title="Model Forecast Correlation Matrix",
+            color_continuous_scale="RdBu_r"
+        )
+        
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Performance comparison table
+        st.markdown("### 📊 DETAILED PERFORMANCE METRICS")
+        
+        performance_data = []
+        for i, model_code in enumerate(['GREYKITE', 'MA_4WEEK', 'MA_6WEEK', 'EXP_SMOOTH']):
+            if f'{model_code}_APE' in df.columns:
+                model_name = models[model_code]
+                mape = df[f'{model_code}_APE'].mean()
+                median_ape = df[f'{model_code}_APE'].median()
+                rmse = np.sqrt(df[f'{model_code}_SE'].mean())
+                win_rate = (df[f'{model_code}_WINS'].sum() / len(df)) * 100 if f'{model_code}_WINS' in df.columns else 0
+                
+                performance_data.append({
+                    'Model': model_name,
+                    'MAPE (%)': round(mape, 2),
+                    'Median APE (%)': round(median_ape, 2),
+                    'RMSE (%)': round(rmse, 2),
+                    'Win Rate (%)': round(win_rate, 1),
+                    'Wins': df[f'{model_code}_WINS'].sum() if f'{model_code}_WINS' in df.columns else 0
+                })
+        
+        if performance_data:
+            performance_df = pd.DataFrame(performance_data)
+            st.dataframe(performance_df, use_container_width=True)
+
+def create_pairwise_comparison(df, model1_code, model2_code):
+    """Create detailed pairwise comparison between two models."""
+    models = {
+        'GREYKITE': 'Greykite',
+        'MA_4WEEK': '4-Week MA',
+        'MA_6WEEK': '6-Week MA',
+        'EXP_SMOOTH': 'Exp. Smoothing'
+    }
+    
+    model1_name = models.get(model1_code, model1_code)
+    model2_name = models.get(model2_code, model2_code)
+    
+    st.markdown(f"### ⚔️ {model1_name} vs {model2_name} COMPARISON")
+    
+    # Check if both models have data
+    if f'{model1_code}_APE' not in df.columns or f'{model2_code}_APE' not in df.columns:
+        st.warning("⚠️ One or both models don't have data available.")
+        return
+    
+    # Performance metrics comparison
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        model1_mape = df[f'{model1_code}_APE'].mean()
+        model2_mape = df[f'{model2_code}_APE'].mean()
+        winner = model1_name if model1_mape < model2_mape else model2_name
+        st.metric(
+            "🏆 MAPE Winner",
+            winner,
+            delta=f"{abs(model1_mape - model2_mape):.2f}pp difference"
+        )
+    
+    with col2:
+        model1_wins = df[f'{model1_code}_WINS'].sum() if f'{model1_code}_WINS' in df.columns else 0
+        model2_wins = df[f'{model2_code}_WINS'].sum() if f'{model2_code}_WINS' in df.columns else 0
+        st.metric(
+            f"🎯 {model1_name} Wins",
+            f"{model1_wins}/{len(df)}",
+            delta=f"{(model1_wins/len(df)*100):.1f}%"
+        )
+    
+    with col3:
+        st.metric(
+            f"📊 {model2_name} Wins", 
+            f"{model2_wins}/{len(df)}",
+            delta=f"{(model2_wins/len(df)*100):.1f}%"
+        )
+    
+    # Scatter plot comparison
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=df[f'{model1_code}_APE'],
+        y=df[f'{model2_code}_APE'],
+        mode='markers',
+        name='Data Points',
+        hovertemplate=f'<b>{model1_name} Weekly MAPE:</b> %{{x:.2f}}%<br><b>{model2_name} Weekly MAPE:</b> %{{y:.2f}}%<extra></extra>'
+    ))
+    
+    # Add diagonal line (equal performance)
+    max_val = max(df[f'{model1_code}_APE'].max(), df[f'{model2_code}_APE'].max())
+    fig.add_trace(go.Scatter(
+        x=[0, max_val],
+        y=[0, max_val],
+        mode='lines',
+        name='Equal Performance',
+        line=dict(dash='dash', color='red')
+    ))
+    
+    fig.update_layout(
+        title=f"{model1_name} vs {model2_name} Weekly MAPE Comparison",
+        xaxis_title=f"{model1_name} Weekly MAPE (%)",
+        yaxis_title=f"{model2_name} Weekly MAPE (%)",
+        height=500
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+def create_best_worst_analysis(df):
+    """Analyze best vs worst performing model scenarios."""
+    st.markdown("### 🏆 BEST vs WORST PERFORMANCE ANALYSIS")
+    
+    if 'BEST_MODEL' not in df.columns:
+        st.warning("⚠️ Best model data not available.")
+        return
+    
+    # Best model distribution
+    best_model_counts = df['BEST_MODEL'].value_counts()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**🏆 Best Model Distribution**")
+        fig = px.pie(
+            values=best_model_counts.values,
+            names=best_model_counts.index,
+            title="Which Model Wins Most Often?"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.markdown("**📊 Performance by Scenario**")
+        
+        # Find scenarios where each model performs best
+        models = ['GREYKITE', 'MA_4WEEK', 'MA_6WEEK', 'EXP_SMOOTH']
+        scenario_analysis = []
+        
+        for model in models:
+            if model in df['BEST_MODEL'].values:
+                model_best_df = df[df['BEST_MODEL'] == model]
+                avg_mape = model_best_df[f'{model}_APE'].mean() if f'{model}_APE' in df.columns else 0
+                scenario_analysis.append({
+                    'Model': model,
+                    'Wins': len(model_best_df),
+                    'Avg MAPE When Best': round(avg_mape, 2)
+                })
+        
+        if scenario_analysis:
+            scenario_df = pd.DataFrame(scenario_analysis)
+            st.dataframe(scenario_df, use_container_width=True)
+
+def create_individual_model_analysis(df, model_code, model_name):
+    """Create detailed analysis for a single model."""
+    st.markdown(f"### 🔍 {model_name} DETAILED ANALYSIS")
+    
+    if f'{model_code}_APE' not in df.columns:
+        st.warning(f"⚠️ {model_name} data not available.")
+        return
+    
+    # Performance metrics
+    mape = df[f'{model_code}_APE'].mean()
+    median_ape = df[f'{model_code}_APE'].median()
+    std_ape = df[f'{model_code}_APE'].std()
+    wins = df[f'{model_code}_WINS'].sum() if f'{model_code}_WINS' in df.columns else 0
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("📊 Average Weekly MAPE", f"{mape:.2f}%")
+    with col2:
+        st.metric("📈 Median Weekly MAPE", f"{median_ape:.2f}%")
+    with col3:
+        st.metric("📏 Std Deviation", f"{std_ape:.2f}%")
+    with col4:
+        st.metric("🏆 Total Wins", f"{wins}/{len(df)}")
+    
+    # Distribution plot
+    fig = px.histogram(
+        df,
+        x=f'{model_code}_APE',
+        nbins=30,
+        title=f"{model_name} Weekly MAPE Distribution",
+        labels={f'{model_code}_APE': 'Weekly MAPE (%)'}
+    )
+    
+    fig.add_vline(x=mape, line_dash="dash", line_color="red", annotation_text=f"Mean: {mape:.2f}%")
+    fig.add_vline(x=median_ape, line_dash="dash", line_color="green", annotation_text=f"Median: {median_ape:.2f}%")
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Performance by dimensions
+    st.markdown(f"### 📊 {model_name} PERFORMANCE BY DIMENSIONS")
+    
+    dimension_col1, dimension_col2 = st.columns(2)
+    
+    with dimension_col1:
+        # Performance by location
+        location_perf = df.groupby('WORK_LOCATION')[f'{model_code}_APE'].mean().sort_values()
+        
+        fig = px.bar(
+            x=location_perf.values,
+            y=location_perf.index,
+            orientation='h',
+            title=f"{model_name} Weekly MAPE by Location",
+            labels={'x': 'Average Weekly MAPE (%)', 'y': 'Location'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with dimension_col2:
+        # Performance by department
+        dept_perf = df.groupby('DEPARTMENT_GROUP')[f'{model_code}_APE'].mean().sort_values()
+        
+        fig = px.bar(
+            x=dept_perf.values,
+            y=dept_perf.index,
+            orientation='h',
+            title=f"{model_name} Weekly MAPE by Department",
+            labels={'x': 'Average Weekly MAPE (%)', 'y': 'Department'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+def configure_page():
+    """Configure the Streamlit page settings."""
+    st.set_page_config(
+        page_title="Attendance Forecasting Analytics",
+        page_icon="📊",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Enhanced CSS styling
+    st.markdown("""
+    <style>
+    .main-header {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        text-align: center;
+        color: white;
+        margin-bottom: 2rem;
+    }
+    
+    .main-header h1 {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    
+    .main-header h3 {
+        margin: 0.5rem 0 0 0;
+        font-size: 1.2rem;
+        opacity: 0.9;
+    }
+    
+    .kpi-section {
+        background-color: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+    }
+    
+    .footer {
+        text-align: center;
+        padding: 2rem 0;
+        color: #7f8c8d;
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        margin-top: 2rem;
+    }
+    
+    .stMetric {
+        background-color: white;
+        padding: 1rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 def main():
-    """Main dashboard application."""
-    # Create enhanced header
-    create_header()
+    """Main dashboard application with enhanced 4-model comparison functionality."""
+    # Configure page
+    configure_page()
     
     # Load data
     df = load_data()
     if df is None:
-        st.stop()
+        return
     
-    # Create filters
+    # Create sidebar filters
     filters = create_filters(df)
     
     # Apply filters
     filtered_df = apply_filters(df, filters)
     
-    # Show data info in sidebar
-    show_data_info(df, filtered_df)
+    # Main dashboard header
+    st.markdown("""
+    <div class="main-header">
+        <h1>🎯 ATTENDANCE FORECASTING ANALYTICS DASHBOARD</h1>
+        <h3>📊 4-Model Performance Comparison: Greykite vs Moving Averages vs Exponential Smoothing</h3>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Display filter summary
-    if len(filtered_df) != len(df):
-        filter_summary = []
-        if len(filters['years']) < len(df['YEAR'].unique()):
-            filter_summary.append(f"Years: {', '.join(map(str, filters['years']))}")
-        if len(filters['locations']) < len(df['WORK_LOCATION'].unique()):
-            filter_summary.append(f"Locations: {len(filters['locations'])} selected")
-        if len(filters['departments']) < len(df['DEPARTMENT_GROUP'].unique()):
-            filter_summary.append(f"Departments: {len(filters['departments'])} selected")
-        if len(filters['shifts']) < len(df['SHIFT_TIME'].unique()):
-            filter_summary.append(f"Shifts: {len(filters['shifts'])} selected")
-        if filters['performance'] != "All Data":
-            filter_summary.append(f"Performance: {filters['performance']}")
+    # Display data summary
+    if len(filtered_df) > 0:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("📊 Total Records", f"{len(filtered_df):,}")
+        with col2:
+            unique_locations = filtered_df['WORK_LOCATION'].nunique()
+            st.metric("🏢 Locations", unique_locations)
+        with col3:
+            unique_departments = filtered_df['DEPARTMENT_GROUP'].nunique()
+            st.metric("🏭 Departments", unique_departments)
+        with col4:
+            date_range = (filtered_df['WEEK_BEGIN'].max() - filtered_df['WEEK_BEGIN'].min()).days
+            st.metric("📅 Date Range", f"{date_range} days")
+    
+    # Create visualizations based on selected comparison type
+    comparison_type = filters['comparison']
+    
+    if comparison_type == 'All Models Overview':
+        # Show comprehensive overview of all models
+        create_enhanced_kpi_metrics(filtered_df)
         
-        if filter_summary:
-            st.info(f"🔍 **Active Filters:** {' | '.join(filter_summary)}")
+        # Model performance comparison charts
+        st.markdown("---")
+        create_weekly_mape_trends(filtered_df)
+        
+        # Outliers analysis
+        st.markdown("---")
+        create_outliers_table(filtered_df)
+        
+        # Additional comprehensive analysis
+        create_model_comparison_matrix(filtered_df)
+        
+    elif comparison_type == 'Greykite vs 4-Week MA':
+        # Legacy comparison - focus on these two models
+        create_pairwise_comparison(filtered_df, 'GREYKITE', 'MA_4WEEK')
+        
+    elif comparison_type == 'Greykite vs 6-Week MA':
+        create_pairwise_comparison(filtered_df, 'GREYKITE', 'MA_6WEEK')
+        
+    elif comparison_type == 'Greykite vs Exp. Smoothing':
+        create_pairwise_comparison(filtered_df, 'GREYKITE', 'EXP_SMOOTH')
+        
+    elif comparison_type == 'Moving Average Comparison':
+        create_pairwise_comparison(filtered_df, 'MA_4WEEK', 'MA_6WEEK')
+        
+    elif comparison_type == 'Best vs Worst Performance':
+        create_best_worst_analysis(filtered_df)
+        
+    elif comparison_type == 'Individual Model Focus':
+        focus_model = filters['focus_model']
+        if focus_model:
+            model_mapping = {
+                'Greykite': 'GREYKITE',
+                '4-Week MA': 'MA_4WEEK', 
+                '6-Week MA': 'MA_6WEEK',
+                'Exp. Smoothing': 'EXP_SMOOTH'
+            }
+            model_code = model_mapping.get(focus_model)
+            if model_code:
+                create_individual_model_analysis(filtered_df, model_code, focus_model)
     
-    # Main dashboard sections
-    create_executive_summary(filtered_df)
-    st.markdown("---")
-    
-    create_enhanced_kpi_metrics(filtered_df)
-    st.markdown("---")
-    
-    create_outliers_table(filtered_df)
-    st.markdown("---")
-    
-    create_weekly_mape_trends(filtered_df)
-    st.markdown("---")
-    
-    create_large_error_analysis(filtered_df)
-    st.markdown("---")
-    
-    create_forecast_accuracy_chart(filtered_df)
-    
-    # Enhanced Footer
+    # Footer
     st.markdown("---")
     st.markdown("""
-    <div style="text-align: center; padding: 3rem 0; color: #7f8c8d;">
-        <p style="font-size: 1.4rem; font-weight: 700;">⚡ ADVANCED ATTENDANCE ANALYTICS DASHBOARD</p>
-        <p style="font-size: 1.1rem;">📊 Built with Streamlit & Plotly | 🔄 Real-time Updates | 📈 Interactive Analytics | 🎯 Enhanced User Experience</p>
+    <div class="footer">
+        <p>📊 <strong>Dashboard Features:</strong> 4-Model Comparison | Performance Analytics | Outlier Detection | Trend Analysis</p>
+        <p>🔄 <strong>Last Updated:</strong> Real-time data processing with advanced filtering capabilities</p>
     </div>
     """, unsafe_allow_html=True)
 
