@@ -808,7 +808,7 @@ def create_weekly_mape_trends(df):
     
     for model_code, config in models_config.items():
         if f'{model_code}_APE' in df.columns:
-            agg_dict[f'{model_code}_MAPE'] = df[f'{model_code}_APE'].mean()
+            agg_dict[f'{model_code}_APE'] = 'mean'
             available_models.append(model_code)
     
     if not agg_dict:
@@ -818,9 +818,21 @@ def create_weekly_mape_trends(df):
     # Add win rate data if available
     if 'BEST_MODEL' in df.columns:
         for model_code in available_models:
-            agg_dict[f'{model_code}_WIN_RATE'] = df[f'{model_code}_WINS'].mean() if f'{model_code}_WINS' in df.columns else 0
+            wins_col = f'{model_code}_WINS'
+            if wins_col in df.columns:
+                agg_dict[wins_col] = 'mean'
     
     weekly_data = df.groupby('WEEK_BEGIN').agg(agg_dict).reset_index()
+    
+    # Rename columns to match expected names
+    rename_dict = {}
+    for model_code in available_models:
+        rename_dict[f'{model_code}_APE'] = f'{model_code}_MAPE'
+        wins_col = f'{model_code}_WINS'
+        if wins_col in weekly_data.columns:
+            rename_dict[wins_col] = f'{model_code}_WIN_RATE'
+    
+    weekly_data = weekly_data.rename(columns=rename_dict)
     
     # Create the main trends chart
     fig = make_subplots(
