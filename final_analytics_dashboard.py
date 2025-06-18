@@ -525,8 +525,8 @@ def create_enhanced_kpi_metrics(df):
     for i, (model_code, model_data) in enumerate(metrics.items()):
         with cols[i]:
             st.metric(
-                f"🎯 {model_data['name']}",
-                f"Avg Weekly MAPE: {model_data['MAPE']:.2f}%",
+                f"🎯 {model_data['name']} - Avg Weekly MAPE",
+                f"{model_data['MAPE']:.2f}%",
                 delta=f"Wins: {model_data['WINS']}/{total_weeks} ({model_data['WIN_RATE']:.1f}%)",
                 help=f"RMSE: {model_data['RMSE']:.2f}% | Individual week MAPE values averaged"
             )
@@ -1449,10 +1449,35 @@ def configure_page():
     }
     
     .stMetric {
-        background-color: white;
+        background-color: #ffffff !important;
         padding: 1rem;
         border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border: 1px solid #e1e5e9;
+    }
+    
+    .stMetric [data-testid="metric-container"] {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+    }
+    
+    .stMetric [data-testid="metric-value"] {
+        color: #262730 !important;
+        font-weight: 600;
+    }
+    
+    .stMetric [data-testid="metric-label"] {
+        color: #525252 !important;
+        font-weight: 500;
+    }
+    
+    .stMetric [data-testid="metric-delta"] {
+        color: #28a745 !important;
+        font-weight: 500;
+    }
+    
+    .stMetric [data-testid="metric-delta"][data-color="negative"] {
+        color: #dc3545 !important;
     }
     </style>
     """, unsafe_allow_html=True)
