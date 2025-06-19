@@ -748,8 +748,18 @@ def create_enhanced_kpi_metrics(df):
     st.markdown("### 📊 MODEL PERFORMANCE COMPARISON")
     st.markdown('<div class="kpi-section">', unsafe_allow_html=True)
     
+    # Validate the DataFrame
+    if not isinstance(df, pd.DataFrame):
+        st.error(f"❌ Expected DataFrame for KPI metrics, got {type(df)}")
+        return
+    
     if len(df) == 0:
         st.warning("⚠️ No data available for the selected filters.")
+        return
+    
+    # Check if DataFrame has columns attribute
+    if not hasattr(df, 'columns'):
+        st.error("❌ DataFrame has no columns attribute!")
         return
     
     # Define models and their display names (including all exponential smoothing variants)
@@ -1535,11 +1545,38 @@ def create_model_comparison_matrix(df):
 
 def create_pairwise_comparison(df, model1_code, model2_code):
     """Create detailed pairwise comparison between two models."""
+    
+    # First, validate the DataFrame
+    if not isinstance(df, pd.DataFrame):
+        st.error(f"❌ Expected DataFrame, got {type(df)}")
+        return
+    
+    if len(df) == 0:
+        st.warning("⚠️ No data available for comparison.")
+        return
+    
+    # Debug information
+    st.sidebar.markdown("### 🔧 Pairwise Comparison Debug")
+    st.sidebar.markdown(f"**DataFrame Shape:** {df.shape}")
+    st.sidebar.markdown(f"**DataFrame Type:** {type(df)}")
+    if hasattr(df, 'columns'):
+        st.sidebar.markdown(f"**Total Columns:** {len(df.columns)}")
+        with st.sidebar.expander("Available Columns"):
+            st.write(list(df.columns))
+    else:
+        st.sidebar.error("❌ DataFrame has no columns attribute!")
+        return
+    
     models = {
         'GREYKITE': 'Greykite',
         'MA_4WEEK': '4-Week MA',
         'MA_6WEEK': '6-Week MA',
-        'EXP_SMOOTH': 'Exp. Smoothing'
+        'EXP_SMOOTH': 'Exp. Smoothing',
+        'EXP_SMOOTH_02': 'Exp. Smooth α=0.2',
+        'EXP_SMOOTH_04': 'Exp. Smooth α=0.4',
+        'EXP_SMOOTH_06': 'Exp. Smooth α=0.6',
+        'EXP_SMOOTH_08': 'Exp. Smooth α=0.8',
+        'EXP_SMOOTH_10': 'Exp. Smooth α=1.0'
     }
     
     model1_name = models.get(model1_code, model1_code)
@@ -1548,8 +1585,12 @@ def create_pairwise_comparison(df, model1_code, model2_code):
     st.markdown(f"### ⚔️ {model1_name} vs {model2_name} COMPARISON")
     
     # Check if both models have data
-    if f'{model1_code}_APE' not in df.columns or f'{model2_code}_APE' not in df.columns:
-        st.warning("⚠️ One or both models don't have data available.")
+    required_cols = [f'{model1_code}_APE', f'{model2_code}_APE']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        st.error(f"❌ Missing required columns: {missing_cols}")
+        st.error(f"Available columns: {list(df.columns)}")
         return
     
     # Performance metrics comparison
@@ -1656,10 +1697,25 @@ def create_best_worst_analysis(df):
 
 def create_individual_model_analysis(df, model_code, model_name):
     """Create detailed analysis for a single model."""
+    
+    # Validate the DataFrame
+    if not isinstance(df, pd.DataFrame):
+        st.error(f"❌ Expected DataFrame, got {type(df)}")
+        return
+    
+    if len(df) == 0:
+        st.warning("⚠️ No data available for analysis.")
+        return
+    
     st.markdown(f"### 🔍 {model_name} DETAILED ANALYSIS")
     
-    if f'{model_code}_APE' not in df.columns:
-        st.warning(f"⚠️ {model_name} data not available.")
+    # Check required columns
+    required_cols = [f'{model_code}_APE', 'WORK_LOCATION', 'DEPARTMENT_GROUP']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        st.error(f"❌ Missing required columns for {model_name}: {missing_cols}")
+        st.error(f"Available columns: {list(df.columns)}")
         return
     
     # Performance metrics
