@@ -486,8 +486,11 @@ def apply_filters(df, filters):
                            'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
                            'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
             
+            # Get available columns (works for both DataFrame and Series)
+            available_cols = group.columns if hasattr(group, 'columns') else group.index
+            
             for col in numeric_cols:
-                if col in group.columns:
+                if col in available_cols:
                     result[col] = group[col].mean()
             
             # Calculate individual APE values for each shift, then average them (correct MAPE formula)
@@ -504,11 +507,11 @@ def apply_filters(df, filters):
             }
             
             # For backward compatibility
-            if 'EXP_SMOOTH_04' in group.columns:
+            if 'EXP_SMOOTH_04' in available_cols:
                 models['EXP_SMOOTH'] = 'EXP_SMOOTH_04'  # Use alpha=0.4 as representative
             
             for model_name, forecast_col in models.items():
-                if forecast_col in group.columns and 'ACTUAL_ATTENDANCE_RATE' in group.columns:
+                if forecast_col in available_cols and 'ACTUAL_ATTENDANCE_RATE' in available_cols:
                     # Calculate APE for each individual shift
                     individual_apes = []
                     for idx in group.index:
