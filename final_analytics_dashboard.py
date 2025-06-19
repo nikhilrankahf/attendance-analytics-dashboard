@@ -460,6 +460,12 @@ def apply_filters(df, filters):
         def aggregate_shifts(group):
             """Aggregate AM/PM shifts for each week/location/department combination with correct MAPE calculation"""
             import numpy as np
+            import pandas as pd
+            
+            # Ensure group is a DataFrame (handle case where groupby returns Series)
+            if isinstance(group, pd.Series):
+                group = group.to_frame().T
+            
             result = {}
             
             # Take the first values for grouping columns (they're the same within group)
