@@ -482,7 +482,15 @@ def apply_filters(df, filters):
             if isinstance(group, pd.Series):
                 group = group.to_frame().T
             
+            # Ensure we have a DataFrame
+            if not isinstance(group, pd.DataFrame):
+                raise TypeError(f"Expected DataFrame or Series, got {type(group)}")
+            
             result = {}
+            
+            # Ensure result is always a dictionary
+            if not isinstance(result, dict):
+                raise TypeError(f"Result should be a dictionary, got {type(result)}")
             
             # Take the first values for grouping columns (they're the same within group)
             result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
@@ -503,7 +511,12 @@ def apply_filters(df, filters):
                            'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
             
             # Get available columns (works for both DataFrame and Series)
-            available_cols = group.columns if hasattr(group, 'columns') else group.index
+            if hasattr(group, 'columns'):
+                available_cols = group.columns.tolist()
+            elif hasattr(group, 'index'):
+                available_cols = group.index.tolist()
+            else:
+                available_cols = []
             
             for col in numeric_cols:
                 if col in available_cols:
@@ -539,6 +552,10 @@ def apply_filters(df, filters):
                     
                     # Store the mean of individual APEs (correct MAPE calculation)
                     if individual_apes:
+                        # Ensure result is still a dictionary
+                        if not isinstance(result, dict):
+                            raise TypeError(f"Result should be a dictionary at APE calculation, got {type(result)}")
+                        
                         result[f'{model_name}_APE'] = np.mean(individual_apes)
                         result[f'{model_name}_WEEKLY_MAPE'] = np.mean(individual_apes)
                         
@@ -557,9 +574,19 @@ def apply_filters(df, filters):
                                 individual_se.append(error ** 2)
                         
                         if individual_errors:
-                            result[f'{model_name}_ERROR'] = np.mean(individual_errors)
-                            result[f'{model_name}_ABS_ERROR'] = np.mean(individual_abs_errors)
-                            result[f'{model_name}_SE'] = np.mean(individual_se)
+                            try:
+                                result[f'{model_name}_ERROR'] = np.mean(individual_errors)
+                                result[f'{model_name}_ABS_ERROR'] = np.mean(individual_abs_errors)
+                                result[f'{model_name}_SE'] = np.mean(individual_se)
+                            except Exception as e:
+                                print(f"Error setting metrics for {model_name}: {e}")
+                                print(f"Result type: {type(result)}")
+                                print(f"Result content: {result}")
+                                raise
+            
+            # Final check that result is still a dictionary
+            if not isinstance(result, dict):
+                raise TypeError(f"Result should be a dictionary before converting to Series, got {type(result)}")
             
             return pd.Series(result)
         
