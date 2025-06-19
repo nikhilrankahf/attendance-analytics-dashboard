@@ -491,7 +491,6 @@ def show_data_info(df, filtered_df):
     • **Total Records**: {len(df):,}  
     • **Locations**: {df['WORK_LOCATION'].nunique()}  
     • **Departments**: {df['DEPARTMENT_GROUP'].nunique()}  
-    • **Shifts**: {df['SHIFT_TIME'].nunique()}  
     • **Week Range**: {df['WEEK_NUMBER'].min()} to {df['WEEK_NUMBER'].max()}  
     """)
     
@@ -749,7 +748,7 @@ def create_outliers_table(df):
     st.markdown("### 📋 DETAILED OUTLIERS INFORMATION")
     
     # Prepare display columns
-    base_columns = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'SHIFT_TIME', 'ACTUAL_ATTENDANCE_RATE']
+    base_columns = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'ACTUAL_ATTENDANCE_RATE']
     
     # Add forecast and MAPE columns for available models
     display_columns = base_columns.copy()
@@ -787,7 +786,6 @@ def create_outliers_table(df):
         'WEEK_NUMBER': 'Week',
         'WORK_LOCATION': 'Location',
         'DEPARTMENT_GROUP': 'Department',
-        'SHIFT_TIME': 'Shift',
         'ACTUAL_ATTENDANCE_RATE': 'Actual (%)',
         'Outlier_Models': 'Outlier in Models'
     }
@@ -882,10 +880,10 @@ def create_outliers_table(df):
                 st.markdown(f"• {dept}: {count} outliers")
         
         with pattern_col3:
-            st.markdown("**⏰ Most Problematic Shifts**")
-            shift_outliers = outliers_df['SHIFT_TIME'].value_counts().head(3)
-            for shift, count in shift_outliers.items():
-                st.markdown(f"• {shift}: {count} outliers")
+            st.markdown("**📊 Data Note**")
+            st.markdown("• Shift analysis removed")
+            st.markdown("• AM/PM now aggregated by week")
+            st.markdown("• Focus on location/department patterns")
 
 def create_weekly_mape_trends(df):
     """Create weekly MAPE trends chart for all 4 models."""
