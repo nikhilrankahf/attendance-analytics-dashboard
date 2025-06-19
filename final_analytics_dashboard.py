@@ -225,45 +225,10 @@ def load_data():
             df['EXPONENTIAL_SMOOTHING'] = df['EXP_SMOOTH_04']
             models['EXP_SMOOTH'] = 'EXPONENTIAL_SMOOTHING'
         
-        # AGGREGATE AM/PM SHIFTS: Group by (week, location, department) and take mean of AM/PM values
-        st.info("🔄 Aggregating AM/PM shifts by week/location/department...")
+        # Store original dataframe for conditional aggregation
+        original_df = df.copy()
         
-        # Define aggregation functions for different column types
-        def aggregate_shifts(group):
-            """Aggregate AM/PM shifts for each week/location/department combination"""
-            result = {}
-            
-            # Take the first values for grouping columns (they're the same within group)
-            result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
-            result['WORK_LOCATION'] = group['WORK_LOCATION'].iloc[0] 
-            result['DEPARTMENT_GROUP'] = group['DEPARTMENT_GROUP'].iloc[0]
-            result['YEAR'] = group['YEAR'].iloc[0]
-            result['WEEK_NUM'] = group['WEEK_NUM'].iloc[0]
-            result['QUARTER'] = group['QUARTER'].iloc[0]
-            result['MONTH'] = group['MONTH'].iloc[0]
-            result['MONTH_NAME'] = group['MONTH_NAME'].iloc[0]
-            result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
-            result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
-            
-            # For numeric columns (attendance and forecasts), take the mean of AM/PM
-            numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
-                           'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
-                           'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
-                           'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
-            
-            for col in numeric_cols:
-                if col in group.columns:
-                    result[col] = group[col].mean()
-            
-            return pd.Series(result)
-        
-        # Group by week, location, department and aggregate AM/PM shifts
-        grouped_df = df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts).reset_index(drop=True)
-        
-        # Use the aggregated dataframe for further processing
-        df = grouped_df
-        
-        st.success(f"✅ Aggregated {len(df)} week/location/department combinations from original shift-level data")
+        # Note: Aggregation will be handled in apply_filters() based on shift selection
         
         # Compute errors and metrics for ALL models using aggregated data
         for model_name, forecast_col in models.items():
@@ -433,10 +398,10 @@ def create_filters(df):
     }
 
 def apply_filters(df, filters):
-    """Apply all selected filters to the dataframe."""
+    """Apply all selected filters to the dataframe with conditional AM/PM aggregation."""
     filtered_df = df.copy()
     
-    # Apply basic filters
+    # Apply basic filters first
     if filters['years']:
         filtered_df = filtered_df[filtered_df['YEAR'].isin(filters['years'])]
     
@@ -446,9 +411,6 @@ def apply_filters(df, filters):
     if filters['departments']:
         filtered_df = filtered_df[filtered_df['DEPARTMENT_GROUP'].isin(filters['departments'])]
     
-    if filters['shifts']:
-        filtered_df = filtered_df[filtered_df['SHIFT_TIME'].isin(filters['shifts'])]
-    
     # Apply week range filter
     if filters['week_range'] and len(filters['week_range']) == 2:
         start_week, end_week = filters['week_range']
@@ -457,6 +419,56 @@ def apply_filters(df, filters):
             (filtered_df['WEEK_NUMBER'] >= start_week) &
             (filtered_df['WEEK_NUMBER'] <= end_week)
         ]
+    
+    # CONDITIONAL AGGREGATION LOGIC:
+    # If both AM and PM shifts are selected (or all shifts), aggregate them
+    # If only one shift is selected, show individual shift data
+    
+    all_shifts = sorted(df['SHIFT_TIME'].unique())
+    selected_shifts = filters.get('shifts', all_shifts)
+    
+    if len(selected_shifts) > 1 and set(selected_shifts) == set(all_shifts):
+        # Both AM and PM selected - aggregate by week/location/department
+        st.info("🔄 Aggregating AM/PM shifts by week/location/department for combined view...")
+        
+        def aggregate_shifts(group):
+            """Aggregate AM/PM shifts for each week/location/department combination"""
+            result = {}
+            
+            # Take the first values for grouping columns (they're the same within group)
+            result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
+            result['WORK_LOCATION'] = group['WORK_LOCATION'].iloc[0] 
+            result['DEPARTMENT_GROUP'] = group['DEPARTMENT_GROUP'].iloc[0]
+            result['YEAR'] = group['YEAR'].iloc[0]
+            result['WEEK_NUM'] = group['WEEK_NUM'].iloc[0]
+            result['QUARTER'] = group['QUARTER'].iloc[0]
+            result['MONTH'] = group['MONTH'].iloc[0]
+            result['MONTH_NAME'] = group['MONTH_NAME'].iloc[0]
+            result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
+            result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
+            
+            # For numeric columns (attendance and forecasts), take the mean of AM/PM
+            numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
+                           'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
+                           'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
+                           'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
+            
+            for col in numeric_cols:
+                if col in group.columns:
+                    result[col] = group[col].mean()
+            
+            return pd.Series(result)
+        
+        # Group by week, location, department and aggregate AM/PM shifts
+        filtered_df = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts).reset_index(drop=True)
+        
+        st.success(f"✅ Aggregated {len(filtered_df)} week/location/department combinations")
+        
+    else:
+        # Specific shift(s) selected - show individual shift data
+        if selected_shifts:
+            filtered_df = filtered_df[filtered_df['SHIFT_TIME'].isin(selected_shifts)]
+            st.info(f"📊 Showing individual shift data for: {', '.join(selected_shifts)}")
     
     # Apply performance filter based on best available model
     if filters['performance'] != "All Data":
@@ -487,12 +499,22 @@ def show_data_info(df, filtered_df):
     
     # Original data info
     st.sidebar.markdown("**📈 Original Dataset:**")
-    st.sidebar.markdown(f"""
-    • **Total Records**: {len(df):,}  
-    • **Locations**: {df['WORK_LOCATION'].nunique()}  
-    • **Departments**: {df['DEPARTMENT_GROUP'].nunique()}  
-    • **Week Range**: {df['WEEK_NUMBER'].min()} to {df['WEEK_NUMBER'].max()}  
-    """)
+    # Build info string conditionally
+    info_parts = [
+        f"• **Total Records**: {len(df):,}",
+        f"• **Locations**: {df['WORK_LOCATION'].nunique()}",
+        f"• **Departments**: {df['DEPARTMENT_GROUP'].nunique()}"
+    ]
+    
+    # Add shifts info if column exists
+    if 'SHIFT_TIME' in df.columns:
+        info_parts.append(f"• **Shifts**: {df['SHIFT_TIME'].nunique()}")
+    else:
+        info_parts.append("• **Shifts**: Aggregated (AM/PM combined)")
+    
+    info_parts.append(f"• **Week Range**: {df['WEEK_NUMBER'].min()} to {df['WEEK_NUMBER'].max()}")
+    
+    st.sidebar.markdown("\n".join(info_parts) + "  ")
     
     # Filtered data info
     st.sidebar.markdown("**🔍 Filtered Dataset:**")
@@ -750,6 +772,10 @@ def create_outliers_table(df):
     # Prepare display columns
     base_columns = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'ACTUAL_ATTENDANCE_RATE']
     
+    # Add SHIFT_TIME column if it exists (not aggregated)
+    if 'SHIFT_TIME' in df.columns:
+        base_columns.insert(3, 'SHIFT_TIME')
+    
     # Add forecast and MAPE columns for available models
     display_columns = base_columns.copy()
     for model_code in available_models:
@@ -789,6 +815,10 @@ def create_outliers_table(df):
         'ACTUAL_ATTENDANCE_RATE': 'Actual (%)',
         'Outlier_Models': 'Outlier in Models'
     }
+    
+    # Add SHIFT_TIME rename if column exists
+    if 'SHIFT_TIME' in outliers_display.columns:
+        column_renames['SHIFT_TIME'] = 'Shift'
     
     for model_code in available_models:
         config = models_config[model_code]
@@ -880,10 +910,16 @@ def create_outliers_table(df):
                 st.markdown(f"• {dept}: {count} outliers")
         
         with pattern_col3:
-            st.markdown("**📊 Data Note**")
-            st.markdown("• Shift analysis removed")
-            st.markdown("• AM/PM now aggregated by week")
-            st.markdown("• Focus on location/department patterns")
+            if 'SHIFT_TIME' in outliers_df.columns:
+                st.markdown("**⏰ Most Problematic Shifts**")
+                shift_outliers = outliers_df['SHIFT_TIME'].value_counts().head(3)
+                for shift, count in shift_outliers.items():
+                    st.markdown(f"• {shift}: {count} outliers")
+            else:
+                st.markdown("**📊 Data Note**")
+                st.markdown("• Shift analysis not available")
+                st.markdown("• AM/PM shifts aggregated")
+                st.markdown("• Focus on location/department patterns")
 
 def create_weekly_mape_trends(df):
     """Create weekly MAPE trends chart for all 4 models."""
