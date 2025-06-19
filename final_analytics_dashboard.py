@@ -225,7 +225,47 @@ def load_data():
             df['EXPONENTIAL_SMOOTHING'] = df['EXP_SMOOTH_04']
             models['EXP_SMOOTH'] = 'EXPONENTIAL_SMOOTHING'
         
-        # Compute errors and metrics for ALL 4 models
+        # AGGREGATE AM/PM SHIFTS: Group by (week, location, department) and take mean of AM/PM values
+        st.info("🔄 Aggregating AM/PM shifts by week/location/department...")
+        
+        # Define aggregation functions for different column types
+        def aggregate_shifts(group):
+            """Aggregate AM/PM shifts for each week/location/department combination"""
+            result = {}
+            
+            # Take the first values for grouping columns (they're the same within group)
+            result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
+            result['WORK_LOCATION'] = group['WORK_LOCATION'].iloc[0] 
+            result['DEPARTMENT_GROUP'] = group['DEPARTMENT_GROUP'].iloc[0]
+            result['YEAR'] = group['YEAR'].iloc[0]
+            result['WEEK_NUM'] = group['WEEK_NUM'].iloc[0]
+            result['QUARTER'] = group['QUARTER'].iloc[0]
+            result['MONTH'] = group['MONTH'].iloc[0]
+            result['MONTH_NAME'] = group['MONTH_NAME'].iloc[0]
+            result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
+            result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
+            
+            # For numeric columns (attendance and forecasts), take the mean of AM/PM
+            numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
+                           'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
+                           'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
+                           'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
+            
+            for col in numeric_cols:
+                if col in group.columns:
+                    result[col] = group[col].mean()
+            
+            return pd.Series(result)
+        
+        # Group by week, location, department and aggregate AM/PM shifts
+        grouped_df = df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts).reset_index(drop=True)
+        
+        # Use the aggregated dataframe for further processing
+        df = grouped_df
+        
+        st.success(f"✅ Aggregated {len(df)} week/location/department combinations from original shift-level data")
+        
+        # Compute errors and metrics for ALL models using aggregated data
         for model_name, forecast_col in models.items():
             if forecast_col in df.columns:
                 # Basic errors
