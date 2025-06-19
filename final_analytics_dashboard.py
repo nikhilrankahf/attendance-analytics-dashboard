@@ -590,20 +590,57 @@ def apply_filters(df, filters):
         st.info(f"📈 Found {len(unique_combinations)} unique week/location/department combinations")
         
         try:
+            st.info("🔄 Starting groupby operation...")
             grouped_result = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts)
-            st.info(f"🔍 Groupby result type: {type(grouped_result)}")
+            st.info(f"🔍 Groupby completed. Result type: {type(grouped_result)}")
             st.info(f"🔍 Groupby result shape: {getattr(grouped_result, 'shape', 'No shape attribute')}")
+            st.info(f"🔍 Groupby result length: {len(grouped_result) if hasattr(grouped_result, '__len__') else 'No length'}")
+            
+            # More detailed analysis of the grouped result
+            if hasattr(grouped_result, 'index'):
+                st.info(f"🔍 Groupby result index type: {type(grouped_result.index)}")
+                st.info(f"🔍 Groupby result index length: {len(grouped_result.index)}")
             
             # Convert to DataFrame if needed
             if isinstance(grouped_result, pd.Series):
                 st.info("🔄 Converting Series to DataFrame...")
-                filtered_df = grouped_result.to_frame().T if len(grouped_result) > 0 else pd.DataFrame()
+                st.info(f"🔍 Series has {len(grouped_result)} items")
+                st.info(f"🔍 Series index: {grouped_result.index}")
+                
+                if len(grouped_result) > 0:
+                    # Check if this is a MultiIndex Series (multiple groups) or single Series (one group)
+                    if isinstance(grouped_result.index, pd.MultiIndex):
+                        st.info("🔄 Series has MultiIndex, converting to DataFrame with unstack")
+                        try:
+                            # For MultiIndex, we need to unstack to get proper DataFrame
+                            filtered_df = grouped_result.unstack(fill_value=None)
+                            if filtered_df.empty:
+                                # If unstack results in empty DataFrame, try alternative approach
+                                st.info("🔄 Unstack resulted in empty DataFrame, trying to_frame approach")
+                                filtered_df = pd.DataFrame(grouped_result).T
+                        except Exception as unstack_error:
+                            st.info(f"🔄 Unstack failed ({unstack_error}), using to_frame().T")
+                            filtered_df = grouped_result.to_frame().T
+                    else:
+                        st.info("🔄 Series has regular index, using to_frame().T")
+                        filtered_df = grouped_result.to_frame().T
+                    
+                    st.info(f"🔍 After conversion: type={type(filtered_df)}, shape={filtered_df.shape}")
+                else:
+                    st.info("🔄 Series is empty, creating empty DataFrame")
+                    filtered_df = pd.DataFrame()
+                    st.info(f"🔍 Empty DataFrame created: type={type(filtered_df)}, shape={filtered_df.shape}")
             else:
+                st.info(f"🔄 Result is already a DataFrame: {type(grouped_result)}")
                 filtered_df = grouped_result
             
             # Reset index
+            st.info("🔄 Resetting index...")
             if hasattr(filtered_df, 'reset_index'):
                 filtered_df = filtered_df.reset_index(drop=True)
+                st.info(f"🔍 After reset_index: type={type(filtered_df)}, shape={filtered_df.shape}")
+            else:
+                st.error(f"❌ No reset_index method available for {type(filtered_df)}")
             
             st.success(f"✅ Aggregated to {len(filtered_df)} week/location/department combinations")
             
@@ -614,9 +651,12 @@ def apply_filters(df, filters):
                 st.error(f"❌ Result has no columns attribute. Type: {type(filtered_df)}")
                 
         except Exception as e:
-            st.error(f"❌ Aggregation failed: {str(e)}")
+            st.error(f"❌ Aggregation failed at step: {str(e)}")
+            st.error(f"📊 Error type: {type(e).__name__}")
             st.error(f"📊 Original data shape: {filtered_df.shape}")
             st.error(f"📋 Original columns: {list(filtered_df.columns)}")
+            import traceback
+            st.error(f"📋 Full traceback: {traceback.format_exc()}")
             raise
         
     else:
