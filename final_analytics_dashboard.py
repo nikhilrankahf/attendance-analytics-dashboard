@@ -377,7 +377,7 @@ def create_filters(df):
     # Individual model focus (if selected)
     focus_model = None
     if selected_comparison == 'Individual Model Focus':
-        model_focus_options = ['Greykite', '4-Week MA', '6-Week MA', 'Exp. Smoothing']
+        model_focus_options = ['Greykite', '4-Week MA', '6-Week MA']
         # Add exponential smoothing variants if available
         if 'EXP_SMOOTH_02' in df.columns:
             model_focus_options.extend(['Exp. Smooth α=0.2', 'Exp. Smooth α=0.4', 'Exp. Smooth α=0.6', 'Exp. Smooth α=0.8', 'Exp. Smooth α=1.0'])
@@ -499,7 +499,7 @@ def apply_filters(df, filters):
     # Apply performance filter based on best available model
     if filters['performance'] != "All Data":
         # Find the best performing model for each row to determine performance level
-        available_models = ['GREYKITE', 'MA_4WEEK', 'MA_6WEEK', 'EXP_SMOOTH']
+        available_models = ['GREYKITE', 'MA_4WEEK', 'MA_6WEEK', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 'EXP_SMOOTH_08', 'EXP_SMOOTH_10']
         ape_cols = [f'{model}_APE' for model in available_models if f'{model}_APE' in filtered_df.columns]
         
         if ape_cols:
@@ -626,7 +626,7 @@ def create_executive_summary(df):
     """, unsafe_allow_html=True)
 
 def create_enhanced_kpi_metrics(df):
-    """Create enhanced 4-model comparison KPI metrics dashboard."""
+    """Create enhanced multi-model comparison KPI metrics dashboard (up to 8 models)."""
     st.markdown("### 📊 MODEL PERFORMANCE COMPARISON")
     st.markdown('<div class="kpi-section">', unsafe_allow_html=True)
     
@@ -634,12 +634,16 @@ def create_enhanced_kpi_metrics(df):
         st.warning("⚠️ No data available for the selected filters.")
         return
     
-    # Define models and their display names
+    # Define models and their display names (including all exponential smoothing variants)
     models = {
         'GREYKITE': 'Greykite',
         'MA_4WEEK': '4-Week MA',
         'MA_6WEEK': '6-Week MA',
-        'EXP_SMOOTH': 'Exp. Smoothing'
+        'EXP_SMOOTH_02': 'Exp. Smooth α=0.2',
+        'EXP_SMOOTH_04': 'Exp. Smooth α=0.4',
+        'EXP_SMOOTH_06': 'Exp. Smooth α=0.6',
+        'EXP_SMOOTH_08': 'Exp. Smooth α=0.8',
+        'EXP_SMOOTH_10': 'Exp. Smooth α=1.0'
     }
     
     # Calculate metrics for each available model
@@ -666,19 +670,36 @@ def create_enhanced_kpi_metrics(df):
     
     # Display metrics in columns based on available models
     available_models = list(metrics.keys())
-    cols = st.columns(len(available_models))
     
-    # Color scheme for different models
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    # Handle display for many models - use multiple rows if needed
+    if len(available_models) <= 4:
+        cols = st.columns(len(available_models))
+        col_groups = [cols]
+    else:
+        # Split into rows of 4 columns each
+        col_groups = []
+        for i in range(0, len(available_models), 4):
+            batch = available_models[i:i+4]
+            cols = st.columns(len(batch))
+            col_groups.append(cols)
     
-    for i, (model_code, model_data) in enumerate(metrics.items()):
-        with cols[i]:
-            st.metric(
-                f"🎯 {model_data['name']} - Avg Weekly MAPE",
-                f"{model_data['MAPE']:.2f}%",
-                delta=f"Wins: {model_data['WINS']}/{total_weeks} ({model_data['WIN_RATE']:.1f}%)",
-                help=f"RMSE: {model_data['RMSE']:.2f}% | Individual week MAPE values averaged"
-            )
+    # Color scheme for different models (extended for more models)
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+    
+    model_items = list(metrics.items())
+    for i, (model_code, model_data) in enumerate(model_items):
+        # Determine which column group and position
+        group_idx = i // 4
+        col_idx = i % 4
+        
+        if group_idx < len(col_groups) and col_idx < len(col_groups[group_idx]):
+            with col_groups[group_idx][col_idx]:
+                st.metric(
+                    f"🎯 {model_data['name']}",
+                    f"{model_data['MAPE']:.2f}%",
+                    delta=f"Wins: {model_data['WINS']}/{total_weeks} ({model_data['WIN_RATE']:.1f}%)",
+                    help=f"RMSE: {model_data['RMSE']:.2f}% | Individual week MAPE values averaged"
+                )
     
     # Overall ranking section
     st.markdown("### 🏆 MODEL RANKING")
@@ -736,19 +757,23 @@ def create_enhanced_kpi_metrics(df):
     st.markdown('</div>', unsafe_allow_html=True)
 
 def create_outliers_table(df):
-    """Create comprehensive outliers analysis for all 4 models."""
+    """Create comprehensive outliers analysis for all available models."""
     st.markdown("### 🚨 OUTLIERS ANALYSIS - ALL MODELS")
     
     if len(df) == 0:
         st.warning("⚠️ No data available for the selected filters.")
         return
     
-    # Define models and their forecast columns
+    # Define models and their forecast columns (including all exponential smoothing variants)
     models_config = {
         'GREYKITE': {'name': 'Greykite', 'forecast_col': 'GREYKITE_FORECAST'},
         'MA_4WEEK': {'name': '4-Week MA', 'forecast_col': 'MOVING_AVG_4WEEK_FORECAST'},
         'MA_6WEEK': {'name': '6-Week MA', 'forecast_col': 'SIX_WEEK_ROLLING_AVG'},
-        'EXP_SMOOTH': {'name': 'Exp. Smoothing', 'forecast_col': 'EXPONENTIAL_SMOOTHING'}
+        'EXP_SMOOTH_02': {'name': 'Exp. Smooth α=0.2', 'forecast_col': 'EXP_SMOOTH_02'},
+        'EXP_SMOOTH_04': {'name': 'Exp. Smooth α=0.4', 'forecast_col': 'EXP_SMOOTH_04'},
+        'EXP_SMOOTH_06': {'name': 'Exp. Smooth α=0.6', 'forecast_col': 'EXP_SMOOTH_06'},
+        'EXP_SMOOTH_08': {'name': 'Exp. Smooth α=0.8', 'forecast_col': 'EXP_SMOOTH_08'},
+        'EXP_SMOOTH_10': {'name': 'Exp. Smooth α=1.0', 'forecast_col': 'EXP_SMOOTH_10'}
     }
     
     # Get outliers for any available model
@@ -776,7 +801,18 @@ def create_outliers_table(df):
     # Summary metrics by model
     st.markdown("### 📊 OUTLIER SUMMARY BY MODEL")
     
-    cols = st.columns(len(available_models))
+    # Handle display for many models - use multiple rows if needed
+    if len(available_models) <= 4:
+        cols = st.columns(len(available_models))
+        col_groups = [cols]
+    else:
+        # Split into rows of 4 columns each
+        col_groups = []
+        for i in range(0, len(available_models), 4):
+            batch = available_models[i:i+4]
+            cols = st.columns(len(batch))
+            col_groups.append(cols)
+    
     total_outliers_by_model = {}
     
     for i, model_code in enumerate(available_models):
@@ -785,12 +821,17 @@ def create_outliers_table(df):
         outlier_count = df[outlier_col].sum()
         total_outliers_by_model[model_code] = outlier_count
         
-        with cols[i]:
-            st.metric(
-                f"🚨 {config['name']}",
-                f"{outlier_count} outliers",
-                delta=f"{(outlier_count/len(df)*100):.1f}% of data"
-            )
+        # Determine which column group and position
+        group_idx = i // 4
+        col_idx = i % 4
+        
+        if group_idx < len(col_groups) and col_idx < len(col_groups[group_idx]):
+            with col_groups[group_idx][col_idx]:
+                st.metric(
+                    f"🚨 {config['name']}",
+                    f"{outlier_count} outliers",
+                    delta=f"{(outlier_count/len(df)*100):.1f}% of data"
+                )
     
     # Detailed outliers table
     st.markdown("### 📋 DETAILED OUTLIERS INFORMATION")
@@ -948,20 +989,24 @@ def create_outliers_table(df):
                 st.markdown("• Focus on location/department patterns")
 
 def create_weekly_mape_trends(df):
-    """Create weekly MAPE trends chart for all 4 models."""
+    """Create weekly MAPE trends chart for all available models."""
     st.markdown("### 📅 WEEKLY MAPE TRENDS - ALL MODELS")
-    st.markdown("*Note: Each point represents the average weekly MAPE for that specific week across all locations/departments/shifts*")
+    st.markdown("*Note: Each point represents the average weekly MAPE for that specific week across all locations/departments*")
     
     if len(df) == 0:
         st.warning("⚠️ No data available for the selected filters.")
         return
     
-    # Define models and their properties
+    # Define models and their properties (including all exponential smoothing variants)
     models_config = {
         'GREYKITE': {'name': 'Greykite', 'color': '#1f77b4'},
         'MA_4WEEK': {'name': '4-Week MA', 'color': '#ff7f0e'},
         'MA_6WEEK': {'name': '6-Week MA', 'color': '#2ca02c'},
-        'EXP_SMOOTH': {'name': 'Exp. Smoothing', 'color': '#d62728'}
+        'EXP_SMOOTH_02': {'name': 'Exp. Smooth α=0.2', 'color': '#d62728'},
+        'EXP_SMOOTH_04': {'name': 'Exp. Smooth α=0.4', 'color': '#9467bd'},
+        'EXP_SMOOTH_06': {'name': 'Exp. Smooth α=0.6', 'color': '#8c564b'},
+        'EXP_SMOOTH_08': {'name': 'Exp. Smooth α=0.8', 'color': '#e377c2'},
+        'EXP_SMOOTH_10': {'name': 'Exp. Smooth α=1.0', 'color': '#7f7f7f'}
     }
     
     # Prepare weekly aggregated data for all available models
@@ -1709,7 +1754,11 @@ def main():
         create_pairwise_comparison(filtered_df, 'GREYKITE', 'MA_6WEEK')
         
     elif comparison_type == 'Greykite vs Exp. Smoothing':
-        create_pairwise_comparison(filtered_df, 'GREYKITE', 'EXP_SMOOTH')
+        # Use the middle alpha value (0.6) as representative exponential smoothing
+        if 'EXP_SMOOTH_06' in filtered_df.columns:
+            create_pairwise_comparison(filtered_df, 'GREYKITE', 'EXP_SMOOTH_06')
+        else:
+            st.warning("⚠️ Exponential smoothing data not available in this dataset")
         
     elif comparison_type == 'Moving Average Comparison':
         create_pairwise_comparison(filtered_df, 'MA_4WEEK', 'MA_6WEEK')
@@ -1735,7 +1784,6 @@ def main():
                 'Greykite': 'GREYKITE',
                 '4-Week MA': 'MA_4WEEK', 
                 '6-Week MA': 'MA_6WEEK',
-                'Exp. Smoothing': 'EXP_SMOOTH',
                 'Exp. Smooth α=0.2': 'EXP_SMOOTH_02',
                 'Exp. Smooth α=0.4': 'EXP_SMOOTH_04',
                 'Exp. Smooth α=0.6': 'EXP_SMOOTH_06',
@@ -1750,7 +1798,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div class="footer">
-        <p>📊 <strong>Dashboard Features:</strong> Enhanced Greykite Forecasting | 5 Exponential Smoothing Variants | Confidence Intervals | Performance Analytics | Outlier Detection | Trend Analysis</p>
+        <p>📊 <strong>Dashboard Features:</strong> Enhanced Greykite Forecasting | 5 Exponential Smoothing Variants (α=0.2,0.4,0.6,0.8,1.0) | Confidence Intervals | Performance Analytics | Outlier Detection | Trend Analysis</p>
         <p>🔄 <strong>Last Updated:</strong> Real-time data processing with automatic file detection and advanced filtering capabilities</p>
     </div>
     """, unsafe_allow_html=True)
