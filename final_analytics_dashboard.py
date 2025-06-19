@@ -478,196 +478,123 @@ def apply_filters(df, filters):
             import numpy as np
             import pandas as pd
             
-            try:
-                # Debug information
-                print(f"DEBUG: aggregate_shifts called with group type: {type(group)}, shape: {getattr(group, 'shape', 'No shape')}")
-                
-                # Ensure group is a DataFrame (handle case where groupby returns Series)
-                if isinstance(group, pd.Series):
-                    group = group.to_frame().T
-                
-                # Ensure we have a DataFrame
-                if not isinstance(group, pd.DataFrame):
-                    raise TypeError(f"Expected DataFrame or Series, got {type(group)}")
-                
-                if len(group) == 0:
-                    raise ValueError("Empty group received")
-                
-                result = {}
-                
-                # Take the first values for grouping columns (they're the same within group)
-                result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
-                result['WORK_LOCATION'] = group['WORK_LOCATION'].iloc[0] 
-                result['DEPARTMENT_GROUP'] = group['DEPARTMENT_GROUP'].iloc[0]
-                result['YEAR'] = group['YEAR'].iloc[0]
-                result['WEEK_NUM'] = group['WEEK_NUM'].iloc[0]
-                result['QUARTER'] = group['QUARTER'].iloc[0]
-                result['MONTH'] = group['MONTH'].iloc[0]
-                result['MONTH_NAME'] = group['MONTH_NAME'].iloc[0]
-                result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
-                result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
-                
-                # For attendance and forecast columns, take the mean of AM/PM
-                numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
-                               'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
-                               'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
-                               'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
-                
-                # Get available columns
-                available_cols = group.columns.tolist()
-                print(f"DEBUG: Available columns in group: {available_cols}")
-                print(f"DEBUG: Looking for numeric columns: {numeric_cols}")
-                
-                # Check which expected columns are missing
-                missing_cols = [col for col in numeric_cols if col not in available_cols]
-                if missing_cols:
-                    print(f"DEBUG: Missing expected columns: {missing_cols}")
-                
-                for col in numeric_cols:
-                    if col in available_cols:
-                        result[col] = group[col].mean()
-                        print(f"DEBUG: Added {col} to result")
-                    else:
-                        print(f"DEBUG: Skipped {col} - not in available columns")
-                
-                # Calculate individual APE values for each shift, then average them (correct MAPE formula)
-                models = {
-                    'GREYKITE': 'GREYKITE_FORECAST',
-                    'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST',
-                    'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
-                    'EXP_SMOOTH_02': 'EXP_SMOOTH_02',
-                    'EXP_SMOOTH_04': 'EXP_SMOOTH_04',
-                    'EXP_SMOOTH_06': 'EXP_SMOOTH_06',
-                    'EXP_SMOOTH_08': 'EXP_SMOOTH_08',
-                    'EXP_SMOOTH_10': 'EXP_SMOOTH_10'
-                }
-                
-                # For backward compatibility
-                if 'EXP_SMOOTH_04' in available_cols:
-                    models['EXP_SMOOTH'] = 'EXP_SMOOTH_04'
-                
-                for model_name, forecast_col in models.items():
-                    if forecast_col in available_cols and 'ACTUAL_ATTENDANCE_RATE' in available_cols:
-                        # Calculate APE for each individual shift
-                        individual_apes = []
+            # Ensure group is a DataFrame (handle case where groupby returns Series)
+            if isinstance(group, pd.Series):
+                group = group.to_frame().T
+            
+            # Ensure we have a DataFrame
+            if not isinstance(group, pd.DataFrame):
+                return pd.Series()
+            
+            if len(group) == 0:
+                return pd.Series()
+            
+            result = {}
+            
+            # Take the first values for grouping columns (they're the same within group)
+            result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
+            result['WORK_LOCATION'] = group['WORK_LOCATION'].iloc[0] 
+            result['DEPARTMENT_GROUP'] = group['DEPARTMENT_GROUP'].iloc[0]
+            result['YEAR'] = group['YEAR'].iloc[0]
+            result['WEEK_NUM'] = group['WEEK_NUM'].iloc[0]
+            result['QUARTER'] = group['QUARTER'].iloc[0]
+            result['MONTH'] = group['MONTH'].iloc[0]
+            result['MONTH_NAME'] = group['MONTH_NAME'].iloc[0]
+            result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
+            result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
+            
+            # For attendance and forecast columns, take the mean of AM/PM
+            numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
+                           'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
+                           'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
+                           'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
+            
+            # Get available columns
+            available_cols = group.columns.tolist()
+            
+            for col in numeric_cols:
+                if col in available_cols:
+                    result[col] = group[col].mean()
+            
+            # Calculate individual APE values for each shift, then average them (correct MAPE formula)
+            models = {
+                'GREYKITE': 'GREYKITE_FORECAST',
+                'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST',
+                'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
+                'EXP_SMOOTH_02': 'EXP_SMOOTH_02',
+                'EXP_SMOOTH_04': 'EXP_SMOOTH_04',
+                'EXP_SMOOTH_06': 'EXP_SMOOTH_06',
+                'EXP_SMOOTH_08': 'EXP_SMOOTH_08',
+                'EXP_SMOOTH_10': 'EXP_SMOOTH_10'
+            }
+            
+            # For backward compatibility
+            if 'EXP_SMOOTH_04' in available_cols:
+                models['EXP_SMOOTH'] = 'EXP_SMOOTH_04'
+            
+            for model_name, forecast_col in models.items():
+                if forecast_col in available_cols and 'ACTUAL_ATTENDANCE_RATE' in available_cols:
+                    # Calculate APE for each individual shift
+                    individual_apes = []
+                    for idx in group.index:
+                        actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
+                        forecast = group.loc[idx, forecast_col]
+                        if pd.notna(actual) and pd.notna(forecast) and actual != 0:
+                            ape = abs(forecast - actual) / abs(actual) * 100
+                            individual_apes.append(ape)
+                    
+                    # Store the mean of individual APEs (correct MAPE calculation)
+                    if individual_apes:
+                        result[f'{model_name}_APE'] = np.mean(individual_apes)
+                        result[f'{model_name}_WEEKLY_MAPE'] = np.mean(individual_apes)
+                        
+                        # Also calculate other metrics
+                        individual_errors = []
+                        individual_abs_errors = []
+                        individual_se = []
+                        
                         for idx in group.index:
                             actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
                             forecast = group.loc[idx, forecast_col]
-                            if pd.notna(actual) and pd.notna(forecast) and actual != 0:
-                                ape = abs(forecast - actual) / abs(actual) * 100
-                                individual_apes.append(ape)
+                            if pd.notna(actual) and pd.notna(forecast):
+                                error = forecast - actual
+                                individual_errors.append(error)
+                                individual_abs_errors.append(abs(error))
+                                individual_se.append(error ** 2)
                         
-                        # Store the mean of individual APEs (correct MAPE calculation)
-                        if individual_apes:
-                            result[f'{model_name}_APE'] = np.mean(individual_apes)
-                            result[f'{model_name}_WEEKLY_MAPE'] = np.mean(individual_apes)
-                            
-                            # Also calculate other metrics
-                            individual_errors = []
-                            individual_abs_errors = []
-                            individual_se = []
-                            
-                            for idx in group.index:
-                                actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
-                                forecast = group.loc[idx, forecast_col]
-                                if pd.notna(actual) and pd.notna(forecast):
-                                    error = forecast - actual
-                                    individual_errors.append(error)
-                                    individual_abs_errors.append(abs(error))
-                                    individual_se.append(error ** 2)
-                            
-                            if individual_errors:
-                                result[f'{model_name}_ERROR'] = np.mean(individual_errors)
-                                result[f'{model_name}_ABS_ERROR'] = np.mean(individual_abs_errors)
-                                result[f'{model_name}_SE'] = np.mean(individual_se)
-                
-                print(f"DEBUG: aggregate_shifts returning Series with {len(result)} items")
-                return pd.Series(result)
-                
-            except Exception as e:
-                print(f"ERROR in aggregate_shifts: {str(e)}")
-                print(f"Group type: {type(group)}, Group shape: {getattr(group, 'shape', 'No shape')}")
-                if hasattr(group, 'columns'):
-                    print(f"Group columns: {list(group.columns)}")
-                raise
+                        if individual_errors:
+                            result[f'{model_name}_ERROR'] = np.mean(individual_errors)
+                            result[f'{model_name}_ABS_ERROR'] = np.mean(individual_abs_errors)
+                            result[f'{model_name}_SE'] = np.mean(individual_se)
+            
+            return pd.Series(result)
         
         # Group by week, location, department and aggregate AM/PM shifts
-        st.info(f"🔄 Aggregating {len(filtered_df)} shift records...")
-        st.info(f"📊 Columns before aggregation: {list(filtered_df.columns)}")
+        grouped_result = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts)
         
-        # Debug: Show unique combinations before grouping
-        unique_combinations = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).size()
-        st.info(f"📈 Found {len(unique_combinations)} unique week/location/department combinations")
-        
-        try:
-            st.info("🔄 Starting groupby operation...")
-            grouped_result = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts)
-            st.info(f"🔍 Groupby completed. Result type: {type(grouped_result)}")
-            st.info(f"🔍 Groupby result shape: {getattr(grouped_result, 'shape', 'No shape attribute')}")
-            st.info(f"🔍 Groupby result length: {len(grouped_result) if hasattr(grouped_result, '__len__') else 'No length'}")
-            
-            # More detailed analysis of the grouped result
-            if hasattr(grouped_result, 'index'):
-                st.info(f"🔍 Groupby result index type: {type(grouped_result.index)}")
-                st.info(f"🔍 Groupby result index length: {len(grouped_result.index)}")
-            
-            # Convert to DataFrame if needed
-            if isinstance(grouped_result, pd.Series):
-                st.info("🔄 Converting Series to DataFrame...")
-                st.info(f"🔍 Series has {len(grouped_result)} items")
-                st.info(f"🔍 Series index: {grouped_result.index}")
-                
-                if len(grouped_result) > 0:
-                    # Check if this is a MultiIndex Series (multiple groups) or single Series (one group)
-                    if isinstance(grouped_result.index, pd.MultiIndex):
-                        st.info("🔄 Series has MultiIndex, converting to DataFrame with unstack")
-                        try:
-                            # For MultiIndex, we need to unstack to get proper DataFrame
-                            filtered_df = grouped_result.unstack(fill_value=None)
-                            if filtered_df.empty:
-                                # If unstack results in empty DataFrame, try alternative approach
-                                st.info("🔄 Unstack resulted in empty DataFrame, trying to_frame approach")
-                                filtered_df = pd.DataFrame(grouped_result).T
-                        except Exception as unstack_error:
-                            st.info(f"🔄 Unstack failed ({unstack_error}), using to_frame().T")
-                            filtered_df = grouped_result.to_frame().T
-                    else:
-                        st.info("🔄 Series has regular index, using to_frame().T")
+        # Convert to DataFrame if needed
+        if isinstance(grouped_result, pd.Series):
+            if len(grouped_result) > 0:
+                # Check if this is a MultiIndex Series (multiple groups) or single Series (one group)
+                if isinstance(grouped_result.index, pd.MultiIndex):
+                    try:
+                        # For MultiIndex, we need to unstack to get proper DataFrame
+                        filtered_df = grouped_result.unstack(fill_value=None)
+                        if filtered_df.empty:
+                            # If unstack results in empty DataFrame, try alternative approach
+                            filtered_df = pd.DataFrame(grouped_result).T
+                    except Exception:
                         filtered_df = grouped_result.to_frame().T
-                    
-                    st.info(f"🔍 After conversion: type={type(filtered_df)}, shape={filtered_df.shape}")
                 else:
-                    st.info("🔄 Series is empty, creating empty DataFrame")
-                    filtered_df = pd.DataFrame()
-                    st.info(f"🔍 Empty DataFrame created: type={type(filtered_df)}, shape={filtered_df.shape}")
+                    filtered_df = grouped_result.to_frame().T
             else:
-                st.info(f"🔄 Result is already a DataFrame: {type(grouped_result)}")
-                filtered_df = grouped_result
-            
-            # Reset index
-            st.info("🔄 Resetting index...")
-            if hasattr(filtered_df, 'reset_index'):
-                filtered_df = filtered_df.reset_index(drop=True)
-                st.info(f"🔍 After reset_index: type={type(filtered_df)}, shape={filtered_df.shape}")
-            else:
-                st.error(f"❌ No reset_index method available for {type(filtered_df)}")
-            
-            st.success(f"✅ Aggregated to {len(filtered_df)} week/location/department combinations")
-            
-            # Safe column access
-            if hasattr(filtered_df, 'columns'):
-                st.info(f"📋 Columns after aggregation: {list(filtered_df.columns)}")
-            else:
-                st.error(f"❌ Result has no columns attribute. Type: {type(filtered_df)}")
-                
-        except Exception as e:
-            st.error(f"❌ Aggregation failed at step: {str(e)}")
-            st.error(f"📊 Error type: {type(e).__name__}")
-            st.error(f"📊 Original data shape: {filtered_df.shape}")
-            st.error(f"📋 Original columns: {list(filtered_df.columns)}")
-            import traceback
-            st.error(f"📋 Full traceback: {traceback.format_exc()}")
-            raise
+                filtered_df = pd.DataFrame()
+        else:
+            filtered_df = grouped_result
+        
+        # Reset index
+        if hasattr(filtered_df, 'reset_index'):
+            filtered_df = filtered_df.reset_index(drop=True)
         
     else:
         # Specific shift(s) selected - show individual shift data
@@ -1641,17 +1568,7 @@ def create_pairwise_comparison(df, model1_code, model2_code):
         st.warning("⚠️ No data available for comparison.")
         return
     
-    # Debug information
-    st.sidebar.markdown("### 🔧 Pairwise Comparison Debug")
-    st.sidebar.markdown(f"**DataFrame Shape:** {df.shape}")
-    st.sidebar.markdown(f"**DataFrame Type:** {type(df)}")
-    if hasattr(df, 'columns'):
-        st.sidebar.markdown(f"**Total Columns:** {len(df.columns)}")
-        with st.sidebar.expander("Available Columns"):
-            st.write(list(df.columns))
-    else:
-        st.sidebar.error("❌ DataFrame has no columns attribute!")
-        return
+
     
     models = {
         'GREYKITE': 'Greykite',
@@ -1965,16 +1882,7 @@ def main():
     # Apply filters
     filtered_df = apply_filters(df, filters)
     
-    # Debug information for troubleshooting
-    st.sidebar.markdown("### 🔧 Debug Info")
-    st.sidebar.markdown(f"**Filtered DF Shape:** {filtered_df.shape}")
-    st.sidebar.markdown(f"**Filtered DF Type:** {type(filtered_df)}")
-    if hasattr(filtered_df, 'columns'):
-        st.sidebar.markdown(f"**Available Columns:** {len(filtered_df.columns)}")
-        with st.sidebar.expander("View All Columns"):
-            st.write(list(filtered_df.columns))
-    else:
-        st.sidebar.error("⚠️ Filtered DataFrame has no columns attribute!")
+
     
     # Main dashboard header
     st.markdown("""
