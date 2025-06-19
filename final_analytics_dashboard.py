@@ -1023,12 +1023,14 @@ def create_outliers_table(df):
     
     outliers_display['Outlier_Models'] = outliers_df.apply(get_outlier_type, axis=1)
     
-    # Format numerical columns
+    # Format numerical columns with proper type conversion
     for col in outliers_display.columns:
         if col in ['ACTUAL_ATTENDANCE_RATE'] or any(forecast_col in col for forecast_col in [config['forecast_col'] for config in models_config.values()]):
-            outliers_display[col] = outliers_display[col].round(2)
+            # Convert to numeric before rounding
+            outliers_display[col] = pd.to_numeric(outliers_display[col], errors='coerce').round(2)
         elif '_APE' in col:
-            outliers_display[col] = outliers_display[col].round(2)
+            # Convert to numeric before rounding
+            outliers_display[col] = pd.to_numeric(outliers_display[col], errors='coerce').round(2)
     
     # Rename columns for better display
     column_renames = {
@@ -1353,7 +1355,9 @@ def create_large_error_analysis(df):
                 st.markdown("**🎯 Greykite Large Errors by Location:**")
                 location_errors = large_errors_greykite.groupby('WORK_LOCATION').agg({
                     'GREYKITE_APE': ['count', 'mean', 'max']
-                }).round(2)
+                })
+                # Ensure numeric data before rounding
+                location_errors = location_errors.apply(pd.to_numeric, errors='coerce').round(2)
                 location_errors.columns = ['Count', 'Avg MAPE (%)', 'Max MAPE (%)']
                 st.dataframe(location_errors, use_container_width=True)
         
@@ -1362,7 +1366,9 @@ def create_large_error_analysis(df):
                 st.markdown("**📈 MA Large Errors by Location:**")
                 location_errors_ma = large_errors_ma.groupby('WORK_LOCATION').agg({
                     'MA_APE': ['count', 'mean', 'max']
-                }).round(2)
+                })
+                # Ensure numeric data before rounding
+                location_errors_ma = location_errors_ma.apply(pd.to_numeric, errors='coerce').round(2)
                 location_errors_ma.columns = ['Count', 'Avg MAPE (%)', 'Max MAPE (%)']
                 st.dataframe(location_errors_ma, use_container_width=True)
         
