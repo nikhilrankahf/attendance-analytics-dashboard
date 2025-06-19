@@ -170,7 +170,13 @@ def load_data():
         }
         
         # Rename columns to match dashboard expectations
+        st.info(f"📋 Original columns: {list(df.columns)}")
         df = df.rename(columns=column_mapping)
+        st.info(f"📋 Mapped columns: {list(df.columns)}")
+        
+        # Check if exponential smoothing columns exist after mapping
+        exp_smooth_cols = [col for col in df.columns if 'EXP_SMOOTH' in col]
+        st.info(f"📊 Exponential smoothing columns found: {exp_smooth_cols}")
         
         # Extract year from week_number for filtering (e.g., 2024-W01 -> 2024)
         def extract_year_from_week(week_str):
@@ -515,10 +521,20 @@ def apply_filters(df, filters):
                 
                 # Get available columns
                 available_cols = group.columns.tolist()
+                print(f"DEBUG: Available columns in group: {available_cols}")
+                print(f"DEBUG: Looking for numeric columns: {numeric_cols}")
+                
+                # Check which expected columns are missing
+                missing_cols = [col for col in numeric_cols if col not in available_cols]
+                if missing_cols:
+                    print(f"DEBUG: Missing expected columns: {missing_cols}")
                 
                 for col in numeric_cols:
                     if col in available_cols:
                         result[col] = group[col].mean()
+                        print(f"DEBUG: Added {col} to result")
+                    else:
+                        print(f"DEBUG: Skipped {col} - not in available columns")
                 
                 # Calculate individual APE values for each shift, then average them (correct MAPE formula)
                 models = {
