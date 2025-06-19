@@ -478,117 +478,108 @@ def apply_filters(df, filters):
             import numpy as np
             import pandas as pd
             
-            # Ensure group is a DataFrame (handle case where groupby returns Series)
-            if isinstance(group, pd.Series):
-                group = group.to_frame().T
-            
-            # Ensure we have a DataFrame
-            if not isinstance(group, pd.DataFrame):
-                raise TypeError(f"Expected DataFrame or Series, got {type(group)}")
-            
-            result = {}
-            
-            # Ensure result is always a dictionary
-            if not isinstance(result, dict):
-                raise TypeError(f"Result should be a dictionary, got {type(result)}")
-            
-            # Take the first values for grouping columns (they're the same within group)
-            result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
-            result['WORK_LOCATION'] = group['WORK_LOCATION'].iloc[0] 
-            result['DEPARTMENT_GROUP'] = group['DEPARTMENT_GROUP'].iloc[0]
-            result['YEAR'] = group['YEAR'].iloc[0]
-            result['WEEK_NUM'] = group['WEEK_NUM'].iloc[0]
-            result['QUARTER'] = group['QUARTER'].iloc[0]
-            result['MONTH'] = group['MONTH'].iloc[0]
-            result['MONTH_NAME'] = group['MONTH_NAME'].iloc[0]
-            result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
-            result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
-            
-            # For attendance and forecast columns, take the mean of AM/PM
-            numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
-                           'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
-                           'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
-                           'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
-            
-            # Get available columns (works for both DataFrame and Series)
-            if hasattr(group, 'columns'):
+            try:
+                # Debug information
+                print(f"DEBUG: aggregate_shifts called with group type: {type(group)}, shape: {getattr(group, 'shape', 'No shape')}")
+                
+                # Ensure group is a DataFrame (handle case where groupby returns Series)
+                if isinstance(group, pd.Series):
+                    group = group.to_frame().T
+                
+                # Ensure we have a DataFrame
+                if not isinstance(group, pd.DataFrame):
+                    raise TypeError(f"Expected DataFrame or Series, got {type(group)}")
+                
+                if len(group) == 0:
+                    raise ValueError("Empty group received")
+                
+                result = {}
+                
+                # Take the first values for grouping columns (they're the same within group)
+                result['WEEK_NUMBER'] = group['WEEK_NUMBER'].iloc[0]
+                result['WORK_LOCATION'] = group['WORK_LOCATION'].iloc[0] 
+                result['DEPARTMENT_GROUP'] = group['DEPARTMENT_GROUP'].iloc[0]
+                result['YEAR'] = group['YEAR'].iloc[0]
+                result['WEEK_NUM'] = group['WEEK_NUM'].iloc[0]
+                result['QUARTER'] = group['QUARTER'].iloc[0]
+                result['MONTH'] = group['MONTH'].iloc[0]
+                result['MONTH_NAME'] = group['MONTH_NAME'].iloc[0]
+                result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
+                result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
+                
+                # For attendance and forecast columns, take the mean of AM/PM
+                numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
+                               'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
+                               'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
+                               'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
+                
+                # Get available columns
                 available_cols = group.columns.tolist()
-            elif hasattr(group, 'index'):
-                available_cols = group.index.tolist()
-            else:
-                available_cols = []
-            
-            for col in numeric_cols:
-                if col in available_cols:
-                    result[col] = group[col].mean()
-            
-            # Calculate individual APE values for each shift, then average them (correct MAPE formula)
-            # This ensures MAPE = mean(|forecast - actual| / |actual|) × 100
-            models = {
-                'GREYKITE': 'GREYKITE_FORECAST',
-                'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST',
-                'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
-                'EXP_SMOOTH_02': 'EXP_SMOOTH_02',
-                'EXP_SMOOTH_04': 'EXP_SMOOTH_04',
-                'EXP_SMOOTH_06': 'EXP_SMOOTH_06',
-                'EXP_SMOOTH_08': 'EXP_SMOOTH_08',
-                'EXP_SMOOTH_10': 'EXP_SMOOTH_10'
-            }
-            
-            # For backward compatibility
-            if 'EXP_SMOOTH_04' in available_cols:
-                models['EXP_SMOOTH'] = 'EXP_SMOOTH_04'  # Use alpha=0.4 as representative
-            
-            for model_name, forecast_col in models.items():
-                if forecast_col in available_cols and 'ACTUAL_ATTENDANCE_RATE' in available_cols:
-                    # Calculate APE for each individual shift
-                    individual_apes = []
-                    for idx in group.index:
-                        actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
-                        forecast = group.loc[idx, forecast_col]
-                        if pd.notna(actual) and pd.notna(forecast) and actual != 0:
-                            ape = abs(forecast - actual) / abs(actual) * 100
-                            individual_apes.append(ape)
-                    
-                    # Store the mean of individual APEs (correct MAPE calculation)
-                    if individual_apes:
-                        # Ensure result is still a dictionary
-                        if not isinstance(result, dict):
-                            raise TypeError(f"Result should be a dictionary at APE calculation, got {type(result)}")
-                        
-                        result[f'{model_name}_APE'] = np.mean(individual_apes)
-                        result[f'{model_name}_WEEKLY_MAPE'] = np.mean(individual_apes)
-                        
-                        # Also calculate other metrics based on individual shift data
-                        individual_errors = []
-                        individual_abs_errors = []
-                        individual_se = []
-                        
+                
+                for col in numeric_cols:
+                    if col in available_cols:
+                        result[col] = group[col].mean()
+                
+                # Calculate individual APE values for each shift, then average them (correct MAPE formula)
+                models = {
+                    'GREYKITE': 'GREYKITE_FORECAST',
+                    'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST',
+                    'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
+                    'EXP_SMOOTH_02': 'EXP_SMOOTH_02',
+                    'EXP_SMOOTH_04': 'EXP_SMOOTH_04',
+                    'EXP_SMOOTH_06': 'EXP_SMOOTH_06',
+                    'EXP_SMOOTH_08': 'EXP_SMOOTH_08',
+                    'EXP_SMOOTH_10': 'EXP_SMOOTH_10'
+                }
+                
+                # For backward compatibility
+                if 'EXP_SMOOTH_04' in available_cols:
+                    models['EXP_SMOOTH'] = 'EXP_SMOOTH_04'
+                
+                for model_name, forecast_col in models.items():
+                    if forecast_col in available_cols and 'ACTUAL_ATTENDANCE_RATE' in available_cols:
+                        # Calculate APE for each individual shift
+                        individual_apes = []
                         for idx in group.index:
                             actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
                             forecast = group.loc[idx, forecast_col]
-                            if pd.notna(actual) and pd.notna(forecast):
-                                error = forecast - actual
-                                individual_errors.append(error)
-                                individual_abs_errors.append(abs(error))
-                                individual_se.append(error ** 2)
+                            if pd.notna(actual) and pd.notna(forecast) and actual != 0:
+                                ape = abs(forecast - actual) / abs(actual) * 100
+                                individual_apes.append(ape)
                         
-                        if individual_errors:
-                            try:
+                        # Store the mean of individual APEs (correct MAPE calculation)
+                        if individual_apes:
+                            result[f'{model_name}_APE'] = np.mean(individual_apes)
+                            result[f'{model_name}_WEEKLY_MAPE'] = np.mean(individual_apes)
+                            
+                            # Also calculate other metrics
+                            individual_errors = []
+                            individual_abs_errors = []
+                            individual_se = []
+                            
+                            for idx in group.index:
+                                actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
+                                forecast = group.loc[idx, forecast_col]
+                                if pd.notna(actual) and pd.notna(forecast):
+                                    error = forecast - actual
+                                    individual_errors.append(error)
+                                    individual_abs_errors.append(abs(error))
+                                    individual_se.append(error ** 2)
+                            
+                            if individual_errors:
                                 result[f'{model_name}_ERROR'] = np.mean(individual_errors)
                                 result[f'{model_name}_ABS_ERROR'] = np.mean(individual_abs_errors)
                                 result[f'{model_name}_SE'] = np.mean(individual_se)
-                            except Exception as e:
-                                print(f"Error setting metrics for {model_name}: {e}")
-                                print(f"Result type: {type(result)}")
-                                print(f"Result content: {result}")
-                                raise
-            
-            # Final check that result is still a dictionary
-            if not isinstance(result, dict):
-                raise TypeError(f"Result should be a dictionary before converting to Series, got {type(result)}")
-            
-            return pd.Series(result)
+                
+                print(f"DEBUG: aggregate_shifts returning Series with {len(result)} items")
+                return pd.Series(result)
+                
+            except Exception as e:
+                print(f"ERROR in aggregate_shifts: {str(e)}")
+                print(f"Group type: {type(group)}, Group shape: {getattr(group, 'shape', 'No shape')}")
+                if hasattr(group, 'columns'):
+                    print(f"Group columns: {list(group.columns)}")
+                raise
         
         # Group by week, location, department and aggregate AM/PM shifts
         st.info(f"🔄 Aggregating {len(filtered_df)} shift records...")
@@ -598,10 +589,35 @@ def apply_filters(df, filters):
         unique_combinations = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).size()
         st.info(f"📈 Found {len(unique_combinations)} unique week/location/department combinations")
         
-        filtered_df = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts).reset_index(drop=True)
-        
-        st.success(f"✅ Aggregated to {len(filtered_df)} week/location/department combinations")
-        st.info(f"📋 Columns after aggregation: {list(filtered_df.columns)}")
+        try:
+            grouped_result = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts)
+            st.info(f"🔍 Groupby result type: {type(grouped_result)}")
+            st.info(f"🔍 Groupby result shape: {getattr(grouped_result, 'shape', 'No shape attribute')}")
+            
+            # Convert to DataFrame if needed
+            if isinstance(grouped_result, pd.Series):
+                st.info("🔄 Converting Series to DataFrame...")
+                filtered_df = grouped_result.to_frame().T if len(grouped_result) > 0 else pd.DataFrame()
+            else:
+                filtered_df = grouped_result
+            
+            # Reset index
+            if hasattr(filtered_df, 'reset_index'):
+                filtered_df = filtered_df.reset_index(drop=True)
+            
+            st.success(f"✅ Aggregated to {len(filtered_df)} week/location/department combinations")
+            
+            # Safe column access
+            if hasattr(filtered_df, 'columns'):
+                st.info(f"📋 Columns after aggregation: {list(filtered_df.columns)}")
+            else:
+                st.error(f"❌ Result has no columns attribute. Type: {type(filtered_df)}")
+                
+        except Exception as e:
+            st.error(f"❌ Aggregation failed: {str(e)}")
+            st.error(f"📊 Original data shape: {filtered_df.shape}")
+            st.error(f"📋 Original columns: {list(filtered_df.columns)}")
+            raise
         
     else:
         # Specific shift(s) selected - show individual shift data
