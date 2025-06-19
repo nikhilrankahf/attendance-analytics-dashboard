@@ -392,6 +392,7 @@ def create_filters(df):
     st.sidebar.markdown("### 🎯 Model Comparison")
     model_options = [
         'All Models Overview',
+        'Time Series Analysis',
         'Greykite vs 4-Week MA', 
         'Greykite vs 6-Week MA',
         'Greykite vs Exp. Smoothing',
@@ -1804,6 +1805,213 @@ def create_individual_model_analysis(df, model_code, model_name):
         )
         st.plotly_chart(fig, use_container_width=True)
 
+def create_time_series_chart(df):
+    """Create a time series chart showing actual attendance rates across weeks for different combinations."""
+    st.markdown("### 📈 Time Series Analysis: Actual Attendance Rates")
+    
+    # Validate required columns
+    required_columns = ['WEEK_NUMBER', 'ACTUAL_ATTENDANCE_RATE', 'WORK_LOCATION', 'DEPARTMENT_GROUP']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        st.error(f"❌ Missing required columns for time series chart: {missing_columns}")
+        return
+    
+    # Check if SHIFT_TIME exists (might be aggregated out)
+    has_shift_time = 'SHIFT_TIME' in df.columns
+    
+    # Create combination identifier
+    if has_shift_time:
+        df['COMBINATION'] = df['WORK_LOCATION'] + ' - ' + df['DEPARTMENT_GROUP'] + ' - ' + df['SHIFT_TIME']
+        groupby_cols = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'SHIFT_TIME']
+    else:
+        df['COMBINATION'] = df['WORK_LOCATION'] + ' - ' + df['DEPARTMENT_GROUP']
+        groupby_cols = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']
+    
+    # Get unique combinations for selection
+    unique_combinations = sorted(df['COMBINATION'].unique())
+    
+    # Create filters for the time series chart
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 🎯 Filter Combinations")
+        selected_combinations = st.multiselect(
+            "Select combinations to display:",
+            options=unique_combinations,
+            default=unique_combinations[:5] if len(unique_combinations) > 5 else unique_combinations,
+            help="Select up to 10 combinations for optimal visualization"
+        )
+    
+    with col2:
+        st.markdown("#### 📊 Chart Options")
+        show_trend_lines = st.checkbox("Show trend lines", value=True)
+        chart_height = st.slider("Chart height", min_value=400, max_value=800, value=600)
+        
+    if not selected_combinations:
+        st.warning("⚠️ Please select at least one combination to display.")
+        return
+    
+    # Limit to 10 combinations for performance
+    if len(selected_combinations) > 10:
+        st.warning("⚠️ Showing only the first 10 selected combinations for optimal performance.")
+        selected_combinations = selected_combinations[:10]
+    
+    # Filter data for selected combinations
+    filtered_data = df[df['COMBINATION'].isin(selected_combinations)].copy()
+    
+    if len(filtered_data) == 0:
+        st.warning("⚠️ No data available for selected combinations.")
+        return
+    
+    # Prepare data for plotting
+    # Group by week and combination to handle any remaining duplicates
+    plot_data = filtered_data.groupby(groupby_cols + ['COMBINATION']).agg({
+        'ACTUAL_ATTENDANCE_RATE': 'mean'
+    }).reset_index()
+    
+    # Create the time series chart using Plotly
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Define colors for different combinations
+    colors = px.colors.qualitative.Set3
+    
+    # Add a line for each combination
+    for i, combination in enumerate(selected_combinations):
+        combo_data = plot_data[plot_data['COMBINATION'] == combination].copy()
+        
+        if len(combo_data) == 0:
+            continue
+            
+        # Sort by week number for proper line connection
+        combo_data = combo_data.sort_values('WEEK_NUMBER')
+        
+        # Convert ACTUAL_ATTENDANCE_RATE to numeric
+        combo_data['ACTUAL_ATTENDANCE_RATE'] = pd.to_numeric(combo_data['ACTUAL_ATTENDANCE_RATE'], errors='coerce')
+        
+        # Add line trace
+        fig.add_trace(go.Scatter(
+            x=combo_data['WEEK_NUMBER'],
+            y=combo_data['ACTUAL_ATTENDANCE_RATE'],
+            mode='lines+markers',
+            name=combination,
+            line=dict(color=colors[i % len(colors)], width=2),
+            marker=dict(size=6),
+            hovertemplate='<b>%{fullData.name}</b><br>' +
+                         'Week: %{x}<br>' +
+                         'Attendance Rate: %{y:.2f}%<br>' +
+                         '<extra></extra>'
+        ))
+        
+        # Add trend line if requested
+        if show_trend_lines and len(combo_data) > 2:
+            # Calculate trend line using numpy polyfit
+            import numpy as np
+            
+            # Create numeric week values for trend calculation
+            week_nums = [int(w.split('-W')[1]) for w in combo_data['WEEK_NUMBER']]
+            y_values = combo_data['ACTUAL_ATTENDANCE_RATE'].dropna()
+            
+            if len(week_nums) == len(y_values) and len(y_values) > 1:
+                z = np.polyfit(week_nums, y_values, 1)
+                p = np.poly1d(z)
+                
+                fig.add_trace(go.Scatter(
+                    x=combo_data['WEEK_NUMBER'],
+                    y=p(week_nums),
+                    mode='lines',
+                    name=f'{combination} (Trend)',
+                    line=dict(color=colors[i % len(colors)], width=1, dash='dash'),
+                    opacity=0.7,
+                    showlegend=False,
+                    hovertemplate='<b>%{fullData.name}</b><br>' +
+                                 'Week: %{x}<br>' +
+                                 'Trend: %{y:.2f}%<br>' +
+                                 '<extra></extra>'
+                ))
+    
+    # Update layout
+    fig.update_layout(
+        title={
+            'text': '📈 Actual Attendance Rate Time Series by Combination',
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 20}
+        },
+        xaxis_title='Week Number',
+        yaxis_title='Actual Attendance Rate (%)',
+        height=chart_height,
+        hovermode='x unified',
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        ),
+        margin=dict(r=200)  # Add right margin for legend
+    )
+    
+    # Update x-axis to show weeks properly
+    fig.update_xaxes(tickangle=45)
+    
+    # Display the chart
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Show summary statistics
+    st.markdown("#### 📊 Summary Statistics")
+    
+    # Calculate summary stats for each combination
+    summary_stats = []
+    for combination in selected_combinations:
+        combo_data = plot_data[plot_data['COMBINATION'] == combination]
+        if len(combo_data) > 0:
+            stats = {
+                'Combination': combination,
+                'Weeks': len(combo_data),
+                'Avg Rate (%)': combo_data['ACTUAL_ATTENDANCE_RATE'].mean(),
+                'Min Rate (%)': combo_data['ACTUAL_ATTENDANCE_RATE'].min(),
+                'Max Rate (%)': combo_data['ACTUAL_ATTENDANCE_RATE'].max(),
+                'Std Dev (%)': combo_data['ACTUAL_ATTENDANCE_RATE'].std()
+            }
+            summary_stats.append(stats)
+    
+    if summary_stats:
+        summary_df = pd.DataFrame(summary_stats)
+        
+        # Format numeric columns
+        for col in ['Avg Rate (%)', 'Min Rate (%)', 'Max Rate (%)', 'Std Dev (%)']:
+            summary_df[col] = summary_df[col].round(2)
+        
+        st.dataframe(summary_df, use_container_width=True)
+    
+    # Add insights
+    st.markdown("#### 💡 Key Insights")
+    
+    if len(summary_stats) > 0:
+        summary_df = pd.DataFrame(summary_stats)
+        
+        # Find best and worst performing combinations
+        best_combo = summary_df.loc[summary_df['Avg Rate (%)'].idxmax()]
+        worst_combo = summary_df.loc[summary_df['Avg Rate (%)'].idxmin()]
+        most_volatile = summary_df.loc[summary_df['Std Dev (%)'].idxmax()]
+        most_stable = summary_df.loc[summary_df['Std Dev (%)'].idxmin()]
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.success(f"🏆 **Best Average Performance:** {best_combo['Combination']} ({best_combo['Avg Rate (%)']:.2f}%)")
+            st.info(f"📊 **Most Stable:** {most_stable['Combination']} (Std Dev: {most_stable['Std Dev (%)']:.2f}%)")
+        
+        with col2:
+            st.error(f"⚠️ **Lowest Average Performance:** {worst_combo['Combination']} ({worst_combo['Avg Rate (%)']:.2f}%)")
+            st.warning(f"📈 **Most Volatile:** {most_volatile['Combination']} (Std Dev: {most_volatile['Std Dev (%)']:.2f}%)")
+
 def configure_page():
     """Configure the Streamlit page settings."""
     st.set_page_config(
@@ -1958,6 +2166,10 @@ def main():
         
         # Additional comprehensive analysis
         create_model_comparison_matrix(filtered_df)
+        
+    elif comparison_type == 'Time Series Analysis':
+        # Show time series chart for actual attendance rates
+        create_time_series_chart(filtered_df)
         
     elif comparison_type == 'Greykite vs 4-Week MA':
         # Legacy comparison - focus on these two models
