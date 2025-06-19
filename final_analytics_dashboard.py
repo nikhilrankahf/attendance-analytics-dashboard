@@ -263,26 +263,29 @@ def calculate_performance_metrics(df):
     # Compute errors and metrics for ALL models
     for model_name, forecast_col in models.items():
         if forecast_col in df.columns:
-            # Basic errors
-            df[f'{model_name}_ERROR'] = df[forecast_col] - df['ACTUAL_ATTENDANCE_RATE']
-            df[f'{model_name}_ABS_ERROR'] = np.abs(df[f'{model_name}_ERROR'])
+            # Only calculate metrics if they haven't been calculated during aggregation
+            if f'{model_name}_APE' not in df.columns:
+                # Basic errors
+                df[f'{model_name}_ERROR'] = df[forecast_col] - df['ACTUAL_ATTENDANCE_RATE']
+                df[f'{model_name}_ABS_ERROR'] = np.abs(df[f'{model_name}_ERROR'])
+                
+                # Weekly MAPE calculation: |Forecast - Actual| / |Actual| * 100 for each individual week
+                df[f'{model_name}_WEEKLY_MAPE'] = np.abs(df[f'{model_name}_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
+                df[f'{model_name}_WEEKLY_MAPE'] = df[f'{model_name}_WEEKLY_MAPE'].replace([np.inf, -np.inf], np.nan)
+                
+                # Keep APE column for backward compatibility (same as WEEKLY_MAPE)
+                df[f'{model_name}_APE'] = df[f'{model_name}_WEEKLY_MAPE']
+                
+                # Squared errors for MSE/RMSE
+                df[f'{model_name}_SE'] = df[f'{model_name}_ERROR'] ** 2
             
-            # Weekly MAPE calculation: |Forecast - Actual| / |Actual| * 100 for each individual week
-            df[f'{model_name}_WEEKLY_MAPE'] = np.abs(df[f'{model_name}_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
-            df[f'{model_name}_WEEKLY_MAPE'] = df[f'{model_name}_WEEKLY_MAPE'].replace([np.inf, -np.inf], np.nan)
-            
-            # Keep APE column for backward compatibility (same as WEEKLY_MAPE)
-            df[f'{model_name}_APE'] = df[f'{model_name}_WEEKLY_MAPE']
-            
-            # Squared errors for MSE/RMSE
-            df[f'{model_name}_SE'] = df[f'{model_name}_ERROR'] ** 2
-            
-            # Outlier detection (using IQR method on weekly MAPE)
-            Q1 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.25)
-            Q3 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.75)
-            IQR = Q3 - Q1
-            df[f'{model_name}_APE_OUTLIER'] = ((df[f'{model_name}_WEEKLY_MAPE'] < (Q1 - 1.5 * IQR)) | 
-                                               (df[f'{model_name}_WEEKLY_MAPE'] > (Q3 + 1.5 * IQR))).astype(int)
+            # Always calculate outlier detection (using IQR method on weekly MAPE)
+            if f'{model_name}_APE' in df.columns:
+                Q1 = df[f'{model_name}_APE'].quantile(0.25)
+                Q3 = df[f'{model_name}_APE'].quantile(0.75)
+                IQR = Q3 - Q1
+                df[f'{model_name}_APE_OUTLIER'] = ((df[f'{model_name}_APE'] < (Q1 - 1.5 * IQR)) | 
+                                                   (df[f'{model_name}_APE'] > (Q3 + 1.5 * IQR))).astype(int)
     
     # Performance comparison - find best model for each row
     available_models = [model for model in models.keys() if f'{model}_ABS_ERROR' in df.columns]
@@ -455,7 +458,8 @@ def apply_filters(df, filters):
         st.info("🔄 Aggregating AM/PM shifts by week/location/department for combined view...")
         
         def aggregate_shifts(group):
-            """Aggregate AM/PM shifts for each week/location/department combination"""
+            """Aggregate AM/PM shifts for each week/location/department combination with correct MAPE calculation"""
+            import numpy as np
             result = {}
             
             # Take the first values for grouping columns (they're the same within group)
@@ -470,7 +474,7 @@ def apply_filters(df, filters):
             result['QUARTER_NAME'] = group['QUARTER_NAME'].iloc[0]
             result['WEEK_NUMBER_MISSING'] = group['WEEK_NUMBER_MISSING'].iloc[0]
             
-            # For numeric columns (attendance and forecasts), take the mean of AM/PM
+            # For attendance and forecast columns, take the mean of AM/PM
             numeric_cols = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
                            'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
                            'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'EXPONENTIAL_SMOOTHING',
@@ -479,6 +483,58 @@ def apply_filters(df, filters):
             for col in numeric_cols:
                 if col in group.columns:
                     result[col] = group[col].mean()
+            
+            # Calculate individual APE values for each shift, then average them (correct MAPE formula)
+            # This ensures MAPE = mean(|forecast - actual| / |actual|) × 100
+            models = {
+                'GREYKITE': 'GREYKITE_FORECAST',
+                'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST',
+                'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
+                'EXP_SMOOTH_02': 'EXP_SMOOTH_02',
+                'EXP_SMOOTH_04': 'EXP_SMOOTH_04',
+                'EXP_SMOOTH_06': 'EXP_SMOOTH_06',
+                'EXP_SMOOTH_08': 'EXP_SMOOTH_08',
+                'EXP_SMOOTH_10': 'EXP_SMOOTH_10'
+            }
+            
+            # For backward compatibility
+            if 'EXP_SMOOTH_04' in group.columns:
+                models['EXP_SMOOTH'] = 'EXP_SMOOTH_04'  # Use alpha=0.4 as representative
+            
+            for model_name, forecast_col in models.items():
+                if forecast_col in group.columns and 'ACTUAL_ATTENDANCE_RATE' in group.columns:
+                    # Calculate APE for each individual shift
+                    individual_apes = []
+                    for idx in group.index:
+                        actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
+                        forecast = group.loc[idx, forecast_col]
+                        if pd.notna(actual) and pd.notna(forecast) and actual != 0:
+                            ape = abs(forecast - actual) / abs(actual) * 100
+                            individual_apes.append(ape)
+                    
+                    # Store the mean of individual APEs (correct MAPE calculation)
+                    if individual_apes:
+                        result[f'{model_name}_APE'] = np.mean(individual_apes)
+                        result[f'{model_name}_WEEKLY_MAPE'] = np.mean(individual_apes)
+                        
+                        # Also calculate other metrics based on individual shift data
+                        individual_errors = []
+                        individual_abs_errors = []
+                        individual_se = []
+                        
+                        for idx in group.index:
+                            actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
+                            forecast = group.loc[idx, forecast_col]
+                            if pd.notna(actual) and pd.notna(forecast):
+                                error = forecast - actual
+                                individual_errors.append(error)
+                                individual_abs_errors.append(abs(error))
+                                individual_se.append(error ** 2)
+                        
+                        if individual_errors:
+                            result[f'{model_name}_ERROR'] = np.mean(individual_errors)
+                            result[f'{model_name}_ABS_ERROR'] = np.mean(individual_abs_errors)
+                            result[f'{model_name}_SE'] = np.mean(individual_se)
             
             return pd.Series(result)
         
