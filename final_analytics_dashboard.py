@@ -243,6 +243,17 @@ def calculate_performance_metrics(df):
     """Calculate performance metrics for all models after aggregation."""
     import numpy as np
     
+    # Handle case where df might be a Series (convert to DataFrame)
+    if isinstance(df, pd.Series):
+        df = df.to_frame().T
+    
+    # Ensure we have a DataFrame
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError(f"Expected DataFrame or Series, got {type(df)}")
+    
+    # Check if df has the columns attribute (should now be guaranteed)
+    available_cols = df.columns.tolist() if hasattr(df, 'columns') else []
+    
     # Define model mappings
     models = {
         'GREYKITE': 'GREYKITE_FORECAST',
@@ -256,15 +267,15 @@ def calculate_performance_metrics(df):
     }
     
     # For backward compatibility, create a single EXP_SMOOTH column using alpha=0.4 (best performing)
-    if 'EXP_SMOOTH_04' in df.columns:
+    if 'EXP_SMOOTH_04' in available_cols:
         df['EXPONENTIAL_SMOOTHING'] = df['EXP_SMOOTH_04']
         models['EXP_SMOOTH'] = 'EXPONENTIAL_SMOOTHING'
     
     # Compute errors and metrics for ALL models
     for model_name, forecast_col in models.items():
-        if forecast_col in df.columns:
+        if forecast_col in available_cols:
             # Only calculate metrics if they haven't been calculated during aggregation
-            if f'{model_name}_APE' not in df.columns:
+            if f'{model_name}_APE' not in available_cols:
                 # Basic errors
                 df[f'{model_name}_ERROR'] = df[forecast_col] - df['ACTUAL_ATTENDANCE_RATE']
                 df[f'{model_name}_ABS_ERROR'] = np.abs(df[f'{model_name}_ERROR'])
@@ -278,17 +289,22 @@ def calculate_performance_metrics(df):
                 
                 # Squared errors for MSE/RMSE
                 df[f'{model_name}_SE'] = df[f'{model_name}_ERROR'] ** 2
+                
+                # Update available_cols list for new columns
+                available_cols.extend([f'{model_name}_ERROR', f'{model_name}_ABS_ERROR', 
+                                     f'{model_name}_WEEKLY_MAPE', f'{model_name}_APE', f'{model_name}_SE'])
             
             # Always calculate outlier detection (using IQR method on weekly MAPE)
-            if f'{model_name}_APE' in df.columns:
+            if f'{model_name}_APE' in available_cols:
                 Q1 = df[f'{model_name}_APE'].quantile(0.25)
                 Q3 = df[f'{model_name}_APE'].quantile(0.75)
                 IQR = Q3 - Q1
                 df[f'{model_name}_APE_OUTLIER'] = ((df[f'{model_name}_APE'] < (Q1 - 1.5 * IQR)) | 
                                                    (df[f'{model_name}_APE'] > (Q3 + 1.5 * IQR))).astype(int)
+                available_cols.append(f'{model_name}_APE_OUTLIER')
     
     # Performance comparison - find best model for each row
-    available_models = [model for model in models.keys() if f'{model}_ABS_ERROR' in df.columns]
+    available_models = [model for model in models.keys() if f'{model}_ABS_ERROR' in available_cols]
     if available_models:
         error_cols = [f'{model}_ABS_ERROR' for model in available_models]
         df['BEST_MODEL'] = df[error_cols].idxmin(axis=1).str.replace('_ABS_ERROR', '')
@@ -298,7 +314,7 @@ def calculate_performance_metrics(df):
             df[f'{model}_WINS'] = (df['BEST_MODEL'] == model).astype(int)
     
     # Legacy columns for backward compatibility (keep existing Greykite vs MA comparison)
-    if 'GREYKITE_ABS_ERROR' in df.columns and 'MA_4WEEK_ABS_ERROR' in df.columns:
+    if 'GREYKITE_ABS_ERROR' in available_cols and 'MA_4WEEK_ABS_ERROR' in available_cols:
         df['GREYKITE_WINS'] = (df['GREYKITE_ABS_ERROR'] < df['MA_4WEEK_ABS_ERROR']).astype(int)
     
     return df
