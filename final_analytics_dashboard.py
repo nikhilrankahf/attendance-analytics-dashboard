@@ -228,45 +228,7 @@ def load_data():
         # Store original dataframe for conditional aggregation
         original_df = df.copy()
         
-        # Note: Aggregation will be handled in apply_filters() based on shift selection
-        
-        # Compute errors and metrics for ALL models using aggregated data
-        for model_name, forecast_col in models.items():
-            if forecast_col in df.columns:
-                # Basic errors
-                df[f'{model_name}_ERROR'] = df[forecast_col] - df['ACTUAL_ATTENDANCE_RATE']
-                df[f'{model_name}_ABS_ERROR'] = np.abs(df[f'{model_name}_ERROR'])
-                
-                # Weekly MAPE calculation: |Forecast - Actual| / |Actual| * 100 for each individual week
-                df[f'{model_name}_WEEKLY_MAPE'] = np.abs(df[f'{model_name}_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
-                df[f'{model_name}_WEEKLY_MAPE'] = df[f'{model_name}_WEEKLY_MAPE'].replace([np.inf, -np.inf], np.nan)
-                
-                # Keep APE column for backward compatibility (same as WEEKLY_MAPE)
-                df[f'{model_name}_APE'] = df[f'{model_name}_WEEKLY_MAPE']
-                
-                # Squared errors for MSE/RMSE
-                df[f'{model_name}_SE'] = df[f'{model_name}_ERROR'] ** 2
-                
-                # Outlier detection (using IQR method on weekly MAPE)
-                Q1 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.25)
-                Q3 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.75)
-                IQR = Q3 - Q1
-                df[f'{model_name}_APE_OUTLIER'] = ((df[f'{model_name}_WEEKLY_MAPE'] < (Q1 - 1.5 * IQR)) | 
-                                                   (df[f'{model_name}_WEEKLY_MAPE'] > (Q3 + 1.5 * IQR))).astype(int)
-        
-        # Performance comparison - find best model for each row
-        available_models = [model for model in models.keys() if f'{model}_ABS_ERROR' in df.columns]
-        if available_models:
-            error_cols = [f'{model}_ABS_ERROR' for model in available_models]
-            df['BEST_MODEL'] = df[error_cols].idxmin(axis=1).str.replace('_ABS_ERROR', '')
-            
-            # Create win indicators for each model
-            for model in available_models:
-                df[f'{model}_WINS'] = (df['BEST_MODEL'] == model).astype(int)
-        
-        # Legacy columns for backward compatibility (keep existing Greykite vs MA comparison)
-        if 'GREYKITE_ABS_ERROR' in df.columns and 'MA_4WEEK_ABS_ERROR' in df.columns:
-            df['GREYKITE_WINS'] = (df['GREYKITE_ABS_ERROR'] < df['MA_4WEEK_ABS_ERROR']).astype(int)
+        # Note: Aggregation and metric calculation will be handled in apply_filters() based on shift selection
         
         return df
         
@@ -276,6 +238,67 @@ def load_data():
     except Exception as e:
         st.error(f"⚠️ Error loading data: {str(e)}")
         return None
+
+def calculate_performance_metrics(df):
+    """Calculate performance metrics for all models after aggregation."""
+    import numpy as np
+    
+    # Define model mappings
+    models = {
+        'GREYKITE': 'GREYKITE_FORECAST',
+        'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST',
+        'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
+        'EXP_SMOOTH_02': 'EXP_SMOOTH_02',
+        'EXP_SMOOTH_04': 'EXP_SMOOTH_04',
+        'EXP_SMOOTH_06': 'EXP_SMOOTH_06',
+        'EXP_SMOOTH_08': 'EXP_SMOOTH_08',
+        'EXP_SMOOTH_10': 'EXP_SMOOTH_10'
+    }
+    
+    # For backward compatibility, create a single EXP_SMOOTH column using alpha=0.4 (best performing)
+    if 'EXP_SMOOTH_04' in df.columns:
+        df['EXPONENTIAL_SMOOTHING'] = df['EXP_SMOOTH_04']
+        models['EXP_SMOOTH'] = 'EXPONENTIAL_SMOOTHING'
+    
+    # Compute errors and metrics for ALL models
+    for model_name, forecast_col in models.items():
+        if forecast_col in df.columns:
+            # Basic errors
+            df[f'{model_name}_ERROR'] = df[forecast_col] - df['ACTUAL_ATTENDANCE_RATE']
+            df[f'{model_name}_ABS_ERROR'] = np.abs(df[f'{model_name}_ERROR'])
+            
+            # Weekly MAPE calculation: |Forecast - Actual| / |Actual| * 100 for each individual week
+            df[f'{model_name}_WEEKLY_MAPE'] = np.abs(df[f'{model_name}_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
+            df[f'{model_name}_WEEKLY_MAPE'] = df[f'{model_name}_WEEKLY_MAPE'].replace([np.inf, -np.inf], np.nan)
+            
+            # Keep APE column for backward compatibility (same as WEEKLY_MAPE)
+            df[f'{model_name}_APE'] = df[f'{model_name}_WEEKLY_MAPE']
+            
+            # Squared errors for MSE/RMSE
+            df[f'{model_name}_SE'] = df[f'{model_name}_ERROR'] ** 2
+            
+            # Outlier detection (using IQR method on weekly MAPE)
+            Q1 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.25)
+            Q3 = df[f'{model_name}_WEEKLY_MAPE'].quantile(0.75)
+            IQR = Q3 - Q1
+            df[f'{model_name}_APE_OUTLIER'] = ((df[f'{model_name}_WEEKLY_MAPE'] < (Q1 - 1.5 * IQR)) | 
+                                               (df[f'{model_name}_WEEKLY_MAPE'] > (Q3 + 1.5 * IQR))).astype(int)
+    
+    # Performance comparison - find best model for each row
+    available_models = [model for model in models.keys() if f'{model}_ABS_ERROR' in df.columns]
+    if available_models:
+        error_cols = [f'{model}_ABS_ERROR' for model in available_models]
+        df['BEST_MODEL'] = df[error_cols].idxmin(axis=1).str.replace('_ABS_ERROR', '')
+        
+        # Create win indicators for each model
+        for model in available_models:
+            df[f'{model}_WINS'] = (df['BEST_MODEL'] == model).astype(int)
+    
+    # Legacy columns for backward compatibility (keep existing Greykite vs MA comparison)
+    if 'GREYKITE_ABS_ERROR' in df.columns and 'MA_4WEEK_ABS_ERROR' in df.columns:
+        df['GREYKITE_WINS'] = (df['GREYKITE_ABS_ERROR'] < df['MA_4WEEK_ABS_ERROR']).astype(int)
+    
+    return df
 
 def create_header():
     """Create enhanced dashboard header"""
@@ -469,6 +492,9 @@ def apply_filters(df, filters):
         if selected_shifts:
             filtered_df = filtered_df[filtered_df['SHIFT_TIME'].isin(selected_shifts)]
             st.info(f"📊 Showing individual shift data for: {', '.join(selected_shifts)}")
+    
+    # Calculate performance metrics after aggregation/filtering
+    filtered_df = calculate_performance_metrics(filtered_df)
     
     # Apply performance filter based on best available model
     if filters['performance'] != "All Data":
