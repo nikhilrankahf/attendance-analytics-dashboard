@@ -591,9 +591,17 @@ def apply_filters(df, filters):
             return pd.Series(result)
         
         # Group by week, location, department and aggregate AM/PM shifts
+        st.info(f"🔄 Aggregating {len(filtered_df)} shift records...")
+        st.info(f"📊 Columns before aggregation: {list(filtered_df.columns)}")
+        
+        # Debug: Show unique combinations before grouping
+        unique_combinations = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).size()
+        st.info(f"📈 Found {len(unique_combinations)} unique week/location/department combinations")
+        
         filtered_df = filtered_df.groupby(['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP']).apply(aggregate_shifts).reset_index(drop=True)
         
-        st.success(f"✅ Aggregated {len(filtered_df)} week/location/department combinations")
+        st.success(f"✅ Aggregated to {len(filtered_df)} week/location/department combinations")
+        st.info(f"📋 Columns after aggregation: {list(filtered_df.columns)}")
         
     else:
         # Specific shift(s) selected - show individual shift data
@@ -632,6 +640,18 @@ def apply_filters(df, filters):
     essential_columns = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'ACTUAL_ATTENDANCE_RATE']
     missing_columns = [col for col in essential_columns if col not in filtered_df.columns]
     if missing_columns:
+        # Debug information
+        st.error(f"❌ DataFrame validation failed!")
+        st.error(f"**Missing columns:** {missing_columns}")
+        st.error(f"**Available columns:** {list(filtered_df.columns)}")
+        st.error(f"**DataFrame shape:** {filtered_df.shape}")
+        st.error(f"**DataFrame type:** {type(filtered_df)}")
+        
+        # Show first few rows if DataFrame is not empty
+        if len(filtered_df) > 0:
+            st.error("**First few rows:**")
+            st.dataframe(filtered_df.head())
+        
         raise KeyError(f"Essential columns missing from filtered DataFrame: {missing_columns}")
     
     return filtered_df
