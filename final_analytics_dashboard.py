@@ -172,6 +172,15 @@ def load_data():
         # Rename columns to match dashboard expectations
         df = df.rename(columns=column_mapping)
         
+        # Ensure numeric columns are properly typed
+        numeric_columns = ['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST', 
+                          'SIX_WEEK_ROLLING_AVG', 'EXP_SMOOTH_02', 'EXP_SMOOTH_04', 'EXP_SMOOTH_06', 
+                          'EXP_SMOOTH_08', 'EXP_SMOOTH_10', 'GREYKITE_FORECAST_LOWER', 'GREYKITE_FORECAST_UPPER']
+        
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
         # Extract year from week_number for filtering (e.g., 2024-W01 -> 2024)
         def extract_year_from_week(week_str):
             try:
@@ -276,12 +285,16 @@ def calculate_performance_metrics(df):
         if forecast_col in available_cols:
             # Only calculate metrics if they haven't been calculated during aggregation
             if f'{model_name}_APE' not in available_cols:
+                # Ensure numeric data types
+                forecast_data = pd.to_numeric(df[forecast_col], errors='coerce')
+                actual_data = pd.to_numeric(df['ACTUAL_ATTENDANCE_RATE'], errors='coerce')
+                
                 # Basic errors
-                df[f'{model_name}_ERROR'] = df[forecast_col] - df['ACTUAL_ATTENDANCE_RATE']
+                df[f'{model_name}_ERROR'] = forecast_data - actual_data
                 df[f'{model_name}_ABS_ERROR'] = np.abs(df[f'{model_name}_ERROR'])
                 
                 # Weekly MAPE calculation: |Forecast - Actual| / |Actual| * 100 for each individual week
-                df[f'{model_name}_WEEKLY_MAPE'] = np.abs(df[f'{model_name}_ERROR']) / np.abs(df['ACTUAL_ATTENDANCE_RATE']) * 100
+                df[f'{model_name}_WEEKLY_MAPE'] = np.abs(df[f'{model_name}_ERROR']) / np.abs(actual_data) * 100
                 df[f'{model_name}_WEEKLY_MAPE'] = df[f'{model_name}_WEEKLY_MAPE'].replace([np.inf, -np.inf], np.nan)
                 
                 # Keep APE column for backward compatibility (same as WEEKLY_MAPE)
@@ -514,7 +527,9 @@ def apply_filters(df, filters):
             
             for col in numeric_cols:
                 if col in available_cols:
-                    result[col] = group[col].mean()
+                    # Ensure numeric data and handle any remaining object types
+                    numeric_data = pd.to_numeric(group[col], errors='coerce')
+                    result[col] = numeric_data.mean()
             
             # Calculate individual APE values for each shift, then average them (correct MAPE formula)
             models = {
@@ -537,8 +552,8 @@ def apply_filters(df, filters):
                     # Calculate APE for each individual shift
                     individual_apes = []
                     for idx in group.index:
-                        actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
-                        forecast = group.loc[idx, forecast_col]
+                        actual = pd.to_numeric(group.loc[idx, 'ACTUAL_ATTENDANCE_RATE'], errors='coerce')
+                        forecast = pd.to_numeric(group.loc[idx, forecast_col], errors='coerce')
                         if pd.notna(actual) and pd.notna(forecast) and actual != 0:
                             ape = abs(forecast - actual) / abs(actual) * 100
                             individual_apes.append(ape)
@@ -554,8 +569,8 @@ def apply_filters(df, filters):
                         individual_se = []
                         
                         for idx in group.index:
-                            actual = group.loc[idx, 'ACTUAL_ATTENDANCE_RATE']
-                            forecast = group.loc[idx, forecast_col]
+                            actual = pd.to_numeric(group.loc[idx, 'ACTUAL_ATTENDANCE_RATE'], errors='coerce')
+                            forecast = pd.to_numeric(group.loc[idx, forecast_col], errors='coerce')
                             if pd.notna(actual) and pd.notna(forecast):
                                 error = forecast - actual
                                 individual_errors.append(error)
