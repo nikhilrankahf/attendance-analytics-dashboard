@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime as dt
 from datetime import datetime, timedelta
+import os
+import glob
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -135,39 +137,93 @@ st.markdown("""
 
 @st.cache_data
 def load_data():
-    """Load and process the attendance forecast data with all 4 models."""
+    """Load and process the attendance forecast data with enhanced Greykite models."""
     try:
-        # Load the specific CSV file
-        df = pd.read_csv('attendance_forecast_results_20250609_191409.csv')
+        # Dynamic file detection for latest forecast output
+        files = glob.glob('enhanced_attendance_forecast_all_combinations_2024_2025_*.csv')
+        if not files:
+            st.error("⚠️ No enhanced forecast files found! Looking for pattern: enhanced_attendance_forecast_all_combinations_2024_2025_*.csv")
+            return None
         
-        # Parse WEEK_BEGIN as datetime
-        df['WEEK_BEGIN'] = pd.to_datetime(df['WEEK_BEGIN'])
+        # Get the most recent file
+        latest_file = max(files, key=os.path.getctime)
+        st.info(f"📊 Loading data from: {latest_file}")
+        df = pd.read_csv(latest_file)
         
-        # Extract temporal features
-        df['YEAR'] = df['WEEK_BEGIN'].dt.year
-        df['MONTH'] = df['WEEK_BEGIN'].dt.month
-        df['QUARTER'] = df['WEEK_BEGIN'].dt.quarter
+        # Column mapping from new format to dashboard expectations
+        column_mapping = {
+            'week_number': 'WEEK_NUMBER',
+            'work_location': 'WORK_LOCATION', 
+            'shift_time': 'SHIFT_TIME',
+            'department_group': 'DEPARTMENT_GROUP',
+            'actual_attendance': 'ACTUAL_ATTENDANCE_RATE',
+            'greykite_forecast': 'GREYKITE_FORECAST',
+            'four_week_rolling_avg': 'MOVING_AVG_4WEEK_FORECAST',
+            'six_week_rolling_avg': 'SIX_WEEK_ROLLING_AVG',
+            'exponential_smoothing_alpha_2': 'EXP_SMOOTH_02',
+            'exponential_smoothing_alpha_4': 'EXP_SMOOTH_04',
+            'exponential_smoothing_alpha_6': 'EXP_SMOOTH_06', 
+            'exponential_smoothing_alpha_8': 'EXP_SMOOTH_08',
+            'exponential_smoothing_alpha_1': 'EXP_SMOOTH_10',
+            'greykite_forecast_lower_95': 'GREYKITE_FORECAST_LOWER',
+            'greykite_forecast_upper_95': 'GREYKITE_FORECAST_UPPER'
+        }
         
-        # Handle WEEK_NUMBER from CSV - keep original if exists, otherwise leave blank
-        if 'WEEK_NUMBER' not in df.columns:
-            df['WEEK_NUMBER'] = ''  # Keep blank if not in CSV
-        else:
-            # Handle missing values in WEEK_NUMBER - convert NaN to empty string
-            df['WEEK_NUMBER'] = df['WEEK_NUMBER'].fillna('').astype(str)
+        # Rename columns to match dashboard expectations
+        df = df.rename(columns=column_mapping)
         
-        # Create a flag for missing week numbers
+        # Extract year from week_number for filtering (e.g., 2024-W01 -> 2024)
+        def extract_year_from_week(week_str):
+            try:
+                if pd.isna(week_str) or week_str == '':
+                    return None
+                year = str(week_str).split('-W')[0]
+                return int(year)
+            except:
+                return None
+        
+        def extract_week_num_from_week(week_str):
+            try:
+                if pd.isna(week_str) or week_str == '':
+                    return None
+                week = str(week_str).split('-W')[1]
+                return int(week)
+            except:
+                return None
+        
+        df['YEAR'] = df['WEEK_NUMBER'].apply(extract_year_from_week)
+        df['WEEK_NUM'] = df['WEEK_NUMBER'].apply(extract_week_num_from_week)
+        
+        # Create quarter from week number (approximate)
+        df['QUARTER'] = df['WEEK_NUM'].apply(lambda x: 1 if x <= 13 else 2 if x <= 26 else 3 if x <= 39 else 4 if pd.notna(x) else None)
+        df['MONTH'] = df['WEEK_NUM'].apply(lambda x: ((x-1) // 4) + 1 if pd.notna(x) and x <= 52 else None)
+        
+        # Handle missing values in WEEK_NUMBER
+        df['WEEK_NUMBER'] = df['WEEK_NUMBER'].fillna('').astype(str)
         df['WEEK_NUMBER_MISSING'] = (df['WEEK_NUMBER'] == '') | (df['WEEK_NUMBER'].isna())
         
-        df['MONTH_NAME'] = df['WEEK_BEGIN'].dt.month_name()
-        df['QUARTER_NAME'] = 'Q' + df['QUARTER'].astype(str) + ' ' + df['YEAR'].astype(str)
+        # Create month names and quarter names from numeric values
+        month_names = {1: 'January', 2: 'February', 3: 'March', 4: 'April', 5: 'May', 6: 'June',
+                      7: 'July', 8: 'August', 9: 'September', 10: 'October', 11: 'November', 12: 'December'}
+        df['MONTH_NAME'] = df['MONTH'].map(month_names)
+        df['QUARTER_NAME'] = df.apply(lambda row: f"Q{row['QUARTER']} {row['YEAR']}" if pd.notna(row['QUARTER']) and pd.notna(row['YEAR']) else None, axis=1)
         
-        # Define all 4 forecasting models
+        # Enhanced model definitions with multiple exponential smoothing variants
         models = {
             'GREYKITE': 'GREYKITE_FORECAST',
             'MA_4WEEK': 'MOVING_AVG_4WEEK_FORECAST', 
             'MA_6WEEK': 'SIX_WEEK_ROLLING_AVG',
-            'EXP_SMOOTH': 'EXPONENTIAL_SMOOTHING'
+            'EXP_SMOOTH_02': 'EXP_SMOOTH_02',
+            'EXP_SMOOTH_04': 'EXP_SMOOTH_04',
+            'EXP_SMOOTH_06': 'EXP_SMOOTH_06',
+            'EXP_SMOOTH_08': 'EXP_SMOOTH_08',
+            'EXP_SMOOTH_10': 'EXP_SMOOTH_10'
         }
+        
+        # For backward compatibility, create a single EXP_SMOOTH column using alpha=0.4 (best performing)
+        if 'EXP_SMOOTH_04' in df.columns:
+            df['EXPONENTIAL_SMOOTHING'] = df['EXP_SMOOTH_04']
+            models['EXP_SMOOTH'] = 'EXPONENTIAL_SMOOTHING'
         
         # Compute errors and metrics for ALL 4 models
         for model_name, forecast_col in models.items():
@@ -280,6 +336,7 @@ def create_filters(df):
         'Greykite vs 6-Week MA',
         'Greykite vs Exp. Smoothing',
         'Moving Average Comparison',
+        'Exponential Smoothing Variants',
         'Best vs Worst Performance',
         'Individual Model Focus'
     ]
@@ -293,6 +350,9 @@ def create_filters(df):
     focus_model = None
     if selected_comparison == 'Individual Model Focus':
         model_focus_options = ['Greykite', '4-Week MA', '6-Week MA', 'Exp. Smoothing']
+        # Add exponential smoothing variants if available
+        if 'EXP_SMOOTH_02' in df.columns:
+            model_focus_options.extend(['Exp. Smooth α=0.2', 'Exp. Smooth α=0.4', 'Exp. Smooth α=0.6', 'Exp. Smooth α=0.8', 'Exp. Smooth α=1.0'])
         focus_model = st.sidebar.selectbox(
             "Focus on Model",
             model_focus_options,
@@ -307,18 +367,19 @@ def create_filters(df):
         help="Filter data by forecast accuracy levels"
     )
     
-    # Date range filter
-    st.sidebar.markdown("### 📆 Date Range")
-    min_date = df['WEEK_BEGIN'].min().date()
-    max_date = df['WEEK_BEGIN'].max().date()
+    # Week range filter
+    st.sidebar.markdown("### 📅 Week Range")
+    available_weeks = sorted([w for w in df['WEEK_NUMBER'].unique() if w and w != ''])
     
-    date_range = st.sidebar.date_input(
-        "Select Date Range",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date,
-        help="Filter data by specific date range"
-    )
+    if available_weeks:
+        week_range = st.sidebar.select_slider(
+            "Select Week Range",
+            options=available_weeks,
+            value=(available_weeks[0], available_weeks[-1]),
+            help="Filter data by specific week range"
+        )
+    else:
+        week_range = None
     
     return {
         'years': selected_years,
@@ -328,7 +389,7 @@ def create_filters(df):
         'comparison': selected_comparison,
         'focus_model': focus_model,
         'performance': selected_performance,
-        'date_range': date_range
+        'week_range': week_range
     }
 
 def apply_filters(df, filters):
@@ -348,12 +409,13 @@ def apply_filters(df, filters):
     if filters['shifts']:
         filtered_df = filtered_df[filtered_df['SHIFT_TIME'].isin(filters['shifts'])]
     
-    # Apply date range filter
-    if len(filters['date_range']) == 2:
-        start_date, end_date = filters['date_range']
+    # Apply week range filter
+    if filters['week_range'] and len(filters['week_range']) == 2:
+        start_week, end_week = filters['week_range']
+        # Filter by week range (string comparison works for YYYY-WXX format)
         filtered_df = filtered_df[
-            (filtered_df['WEEK_BEGIN'].dt.date >= start_date) &
-            (filtered_df['WEEK_BEGIN'].dt.date <= end_date)
+            (filtered_df['WEEK_NUMBER'] >= start_week) &
+            (filtered_df['WEEK_NUMBER'] <= end_week)
         ]
     
     # Apply performance filter based on best available model
@@ -390,7 +452,7 @@ def show_data_info(df, filtered_df):
     • **Locations**: {df['WORK_LOCATION'].nunique()}  
     • **Departments**: {df['DEPARTMENT_GROUP'].nunique()}  
     • **Shifts**: {df['SHIFT_TIME'].nunique()}  
-    • **Date Range**: {(df['WEEK_BEGIN'].max() - df['WEEK_BEGIN'].min()).days} days  
+    • **Week Range**: {df['WEEK_NUMBER'].min()} to {df['WEEK_NUMBER'].max()}  
     """)
     
     # Filtered data info
@@ -1502,7 +1564,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>🎯 ATTENDANCE FORECASTING ANALYTICS DASHBOARD</h1>
-        <h3>📊 4-Model Performance Comparison: Greykite vs Moving Averages vs Exponential Smoothing</h3>
+        <h3>📊 Enhanced Multi-Model Comparison: Greykite with Confidence Intervals | Multiple Exponential Smoothing Variants | Moving Averages</h3>
     </div>
     """, unsafe_allow_html=True)
     
@@ -1518,8 +1580,8 @@ def main():
             unique_departments = filtered_df['DEPARTMENT_GROUP'].nunique()
             st.metric("🏭 Departments", unique_departments)
         with col4:
-            date_range = (filtered_df['WEEK_BEGIN'].max() - filtered_df['WEEK_BEGIN'].min()).days
-            st.metric("📅 Date Range", f"{date_range} days")
+            week_count = len(filtered_df['WEEK_NUMBER'].unique())
+            st.metric("📅 Weeks", f"{week_count} weeks")
     
     # Create visualizations based on selected comparison type
     comparison_type = filters['comparison']
@@ -1552,6 +1614,17 @@ def main():
     elif comparison_type == 'Moving Average Comparison':
         create_pairwise_comparison(filtered_df, 'MA_4WEEK', 'MA_6WEEK')
         
+    elif comparison_type == 'Exponential Smoothing Variants':
+        # Compare different exponential smoothing alpha values
+        if 'EXP_SMOOTH_02' in filtered_df.columns and 'EXP_SMOOTH_04' in filtered_df.columns:
+            st.markdown("### 📊 Exponential Smoothing Alpha Comparison")
+            st.info("Comparing different alpha values (smoothing parameters) for exponential smoothing")
+            create_pairwise_comparison(filtered_df, 'EXP_SMOOTH_02', 'EXP_SMOOTH_04')
+            st.markdown("---")
+            create_pairwise_comparison(filtered_df, 'EXP_SMOOTH_04', 'EXP_SMOOTH_08')
+        else:
+            st.warning("⚠️ Exponential smoothing variants not available in this dataset")
+        
     elif comparison_type == 'Best vs Worst Performance':
         create_best_worst_analysis(filtered_df)
         
@@ -1562,7 +1635,12 @@ def main():
                 'Greykite': 'GREYKITE',
                 '4-Week MA': 'MA_4WEEK', 
                 '6-Week MA': 'MA_6WEEK',
-                'Exp. Smoothing': 'EXP_SMOOTH'
+                'Exp. Smoothing': 'EXP_SMOOTH',
+                'Exp. Smooth α=0.2': 'EXP_SMOOTH_02',
+                'Exp. Smooth α=0.4': 'EXP_SMOOTH_04',
+                'Exp. Smooth α=0.6': 'EXP_SMOOTH_06',
+                'Exp. Smooth α=0.8': 'EXP_SMOOTH_08',
+                'Exp. Smooth α=1.0': 'EXP_SMOOTH_10'
             }
             model_code = model_mapping.get(focus_model)
             if model_code:
@@ -1572,8 +1650,8 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div class="footer">
-        <p>📊 <strong>Dashboard Features:</strong> 4-Model Comparison | Performance Analytics | Outlier Detection | Trend Analysis</p>
-        <p>🔄 <strong>Last Updated:</strong> Real-time data processing with advanced filtering capabilities</p>
+        <p>📊 <strong>Dashboard Features:</strong> Enhanced Greykite Forecasting | 5 Exponential Smoothing Variants | Confidence Intervals | Performance Analytics | Outlier Detection | Trend Analysis</p>
+        <p>🔄 <strong>Last Updated:</strong> Real-time data processing with automatic file detection and advanced filtering capabilities</p>
     </div>
     """, unsafe_allow_html=True)
 
