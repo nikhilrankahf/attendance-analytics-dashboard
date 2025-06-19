@@ -170,13 +170,7 @@ def load_data():
         }
         
         # Rename columns to match dashboard expectations
-        st.info(f"📋 Original columns: {list(df.columns)}")
         df = df.rename(columns=column_mapping)
-        st.info(f"📋 Mapped columns: {list(df.columns)}")
-        
-        # Check if exponential smoothing columns exist after mapping
-        exp_smooth_cols = [col for col in df.columns if 'EXP_SMOOTH' in col]
-        st.info(f"📊 Exponential smoothing columns found: {exp_smooth_cols}")
         
         # Extract year from week_number for filtering (e.g., 2024-W01 -> 2024)
         def extract_year_from_week(week_str):
