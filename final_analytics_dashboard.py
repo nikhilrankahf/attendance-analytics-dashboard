@@ -984,7 +984,7 @@ def create_weekly_mape_trends(df):
             if wins_col in df.columns:
                 agg_dict[wins_col] = 'mean'
     
-    weekly_data = df.groupby('WEEK_BEGIN').agg(agg_dict).reset_index()
+    weekly_data = df.groupby('WEEK_NUMBER').agg(agg_dict).reset_index()
     
     # Rename columns to match expected names
     rename_dict = {}
@@ -1012,7 +1012,7 @@ def create_weekly_mape_trends(df):
         if mape_col in weekly_data.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=weekly_data['WEEK_BEGIN'],
+                    x=weekly_data['WEEK_NUMBER'],
                     y=weekly_data[mape_col],
                     mode='lines+markers',
                     name=config['name'],
@@ -1032,7 +1032,7 @@ def create_weekly_mape_trends(df):
             if win_rate_col in weekly_data.columns:
                 fig.add_trace(
                     go.Scatter(
-                        x=weekly_data['WEEK_BEGIN'],
+                        x=weekly_data['WEEK_NUMBER'],
                         y=weekly_data[win_rate_col] * 100,
                         mode='lines+markers',
                         name=f"{config['name']} Win Rate",
