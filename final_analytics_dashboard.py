@@ -2021,9 +2021,122 @@ def configure_page():
         initial_sidebar_state="expanded"
     )
     
-    # Enhanced CSS styling
+    # Enhanced CSS styling with light background for all widgets
     st.markdown("""
     <style>
+    /* Force light theme for all widgets */
+    .stApp {
+        background-color: #ffffff;
+        color: #262730;
+    }
+    
+    /* Sidebar styling */
+    .css-1d391kg {
+        background-color: #f8f9fa !important;
+    }
+    
+    /* Main content area */
+    .main .block-container {
+        background-color: #ffffff;
+        color: #262730;
+    }
+    
+    /* Widget containers */
+    .stSelectbox > div > div {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    .stMultiSelect > div > div {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    .stSlider > div > div {
+        background-color: #ffffff !important;
+    }
+    
+    .stCheckbox > label {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+    }
+    
+    /* Input fields */
+    .stTextInput > div > div > input {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    /* Dropdown menus */
+    .stSelectbox [data-baseweb="select"] {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    .stMultiSelect [data-baseweb="select"] {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    /* Dropdown options */
+    [data-baseweb="menu"] {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    [data-baseweb="menu"] [data-highlighted="true"] {
+        background-color: #f8f9fa !important;
+        color: #262730 !important;
+    }
+    
+    /* Selected options in multi-select */
+    [data-baseweb="tag"] {
+        background-color: #e3f2fd !important;
+        color: #1976d2 !important;
+        border: 1px solid #bbdefb !important;
+    }
+    
+    /* Success/Info/Warning/Error messages */
+    .stSuccess {
+        background-color: #d4edda !important;
+        color: #155724 !important;
+        border: 1px solid #c3e6cb !important;
+    }
+    
+    .stInfo {
+        background-color: #d1ecf1 !important;
+        color: #0c5460 !important;
+        border: 1px solid #bee5eb !important;
+    }
+    
+    .stWarning {
+        background-color: #fff3cd !important;
+        color: #856404 !important;
+        border: 1px solid #ffeaa7 !important;
+    }
+    
+    .stError {
+        background-color: #f8d7da !important;
+        color: #721c24 !important;
+        border: 1px solid #f5c6cb !important;
+    }
+    
+    /* Headers and text */
+    h1, h2, h3, h4, h5, h6 {
+        color: #262730 !important;
+    }
+    
+    p, div, span, label {
+        color: #262730 !important;
+    }
+    
+    /* Main header styling */
     .main-header {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         padding: 2rem;
@@ -2037,14 +2150,17 @@ def configure_page():
         margin: 0;
         font-size: 2.5rem;
         font-weight: 700;
+        color: white !important;
     }
     
     .main-header h3 {
         margin: 0.5rem 0 0 0;
         font-size: 1.2rem;
         opacity: 0.9;
+        color: white !important;
     }
     
+    /* KPI section */
     .kpi-section {
         background-color: #f8f9fa;
         padding: 1.5rem;
@@ -2052,15 +2168,17 @@ def configure_page():
         margin-bottom: 2rem;
     }
     
+    /* Footer */
     .footer {
         text-align: center;
         padding: 2rem 0;
-        color: #7f8c8d;
+        color: #7f8c8d !important;
         background-color: #f8f9fa;
         border-radius: 10px;
         margin-top: 2rem;
     }
     
+    /* Metrics styling */
     .stMetric {
         background-color: #ffffff !important;
         padding: 1rem;
@@ -2091,6 +2209,56 @@ def configure_page():
     
     .stMetric [data-testid="metric-delta"][data-color="negative"] {
         color: #dc3545 !important;
+    }
+    
+    /* Dataframes */
+    .stDataFrame {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+    }
+    
+    /* Plotly charts */
+    .js-plotly-plot {
+        background-color: #ffffff !important;
+    }
+    
+    /* Expander */
+    .streamlit-expanderHeader {
+        background-color: #f8f9fa !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    .streamlit-expanderContent {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: #f8f9fa !important;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        background-color: #ffffff !important;
+        color: #262730 !important;
+        border: 1px solid #e1e5e9 !important;
+    }
+    
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background-color: #667eea !important;
+        color: #ffffff !important;
+    }
+    
+    /* Ensure all text is readable */
+    * {
+        color: #262730 !important;
+    }
+    
+    /* Override for header text */
+    .main-header *, .footer * {
+        color: inherit !important;
     }
     </style>
     """, unsafe_allow_html=True)
