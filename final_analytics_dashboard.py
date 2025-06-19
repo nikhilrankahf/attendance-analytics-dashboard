@@ -135,7 +135,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data
+@st.cache_data(ttl=300)  # Cache for 5 minutes to ensure fresh data
 def load_data():
     """Load and process the attendance forecast data with enhanced Greykite models."""
     try:
@@ -1991,7 +1991,7 @@ def main():
     st.markdown("""
     <div class="footer">
         <p>📊 <strong>Dashboard Features:</strong> Enhanced Greykite Forecasting | 5 Exponential Smoothing Variants (α=0.2,0.4,0.6,0.8,1.0) | Confidence Intervals | Performance Analytics | Outlier Detection | Trend Analysis</p>
-        <p>🔄 <strong>Last Updated:</strong> Real-time data processing with automatic file detection and advanced filtering capabilities</p>
+        <p>🔄 <strong>Last Updated:</strong> Real-time data processing with automatic file detection and advanced filtering capabilities (Debug-Free Version)</p>
     </div>
     """, unsafe_allow_html=True)
 
