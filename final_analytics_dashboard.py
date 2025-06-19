@@ -624,6 +624,16 @@ def apply_filters(df, filters):
             # Remove the temporary column
             filtered_df = filtered_df.drop('MIN_MAPE', axis=1)
     
+    # Final safety check before returning
+    if not isinstance(filtered_df, pd.DataFrame):
+        raise TypeError(f"apply_filters should return a DataFrame, got {type(filtered_df)}")
+    
+    # Ensure essential columns exist
+    essential_columns = ['WEEK_NUMBER', 'WORK_LOCATION', 'DEPARTMENT_GROUP', 'ACTUAL_ATTENDANCE_RATE']
+    missing_columns = [col for col in essential_columns if col not in filtered_df.columns]
+    if missing_columns:
+        raise KeyError(f"Essential columns missing from filtered DataFrame: {missing_columns}")
+    
     return filtered_df
 
 def show_data_info(df, filtered_df):
@@ -1813,6 +1823,17 @@ def main():
     # Apply filters
     filtered_df = apply_filters(df, filters)
     
+    # Debug information for troubleshooting
+    st.sidebar.markdown("### 🔧 Debug Info")
+    st.sidebar.markdown(f"**Filtered DF Shape:** {filtered_df.shape}")
+    st.sidebar.markdown(f"**Filtered DF Type:** {type(filtered_df)}")
+    if hasattr(filtered_df, 'columns'):
+        st.sidebar.markdown(f"**Available Columns:** {len(filtered_df.columns)}")
+        with st.sidebar.expander("View All Columns"):
+            st.write(list(filtered_df.columns))
+    else:
+        st.sidebar.error("⚠️ Filtered DataFrame has no columns attribute!")
+    
     # Main dashboard header
     st.markdown("""
     <div class="main-header">
@@ -1827,14 +1848,27 @@ def main():
         with col1:
             st.metric("📊 Total Records", f"{len(filtered_df):,}")
         with col2:
-            unique_locations = filtered_df['WORK_LOCATION'].nunique()
-            st.metric("🏢 Locations", unique_locations)
+            # Safe access to columns with error handling
+            if 'WORK_LOCATION' in filtered_df.columns:
+                unique_locations = filtered_df['WORK_LOCATION'].nunique()
+                st.metric("🏢 Locations", unique_locations)
+            else:
+                st.metric("🏢 Locations", "N/A")
+                st.error(f"Missing WORK_LOCATION column. Available columns: {list(filtered_df.columns)}")
         with col3:
-            unique_departments = filtered_df['DEPARTMENT_GROUP'].nunique()
-            st.metric("🏭 Departments", unique_departments)
+            if 'DEPARTMENT_GROUP' in filtered_df.columns:
+                unique_departments = filtered_df['DEPARTMENT_GROUP'].nunique()
+                st.metric("🏭 Departments", unique_departments)
+            else:
+                st.metric("🏭 Departments", "N/A")
+                st.error(f"Missing DEPARTMENT_GROUP column. Available columns: {list(filtered_df.columns)}")
         with col4:
-            week_count = len(filtered_df['WEEK_NUMBER'].unique())
-            st.metric("📅 Weeks", f"{week_count} weeks")
+            if 'WEEK_NUMBER' in filtered_df.columns:
+                week_count = len(filtered_df['WEEK_NUMBER'].unique())
+                st.metric("📅 Weeks", f"{week_count} weeks")
+            else:
+                st.metric("📅 Weeks", "N/A")
+                st.error(f"Missing WEEK_NUMBER column. Available columns: {list(filtered_df.columns)}")
     
     # Create visualizations based on selected comparison type
     comparison_type = filters['comparison']
