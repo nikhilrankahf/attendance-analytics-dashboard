@@ -160,21 +160,21 @@ def run_greykite_realistic_forecast(
         )
 
         model_components = ModelComponentsParam(
-    seasonality={
-        "yearly_seasonality": 4,     # Fourier order (int)
-        "quarterly_seasonality": False,
-        "monthly_seasonality": False,
-        "weekly_seasonality": False, # use False, not None
-        "daily_seasonality": False
-    },
-    autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
-    events={
-        "holiday_lookup_countries": ["US"],
-        "holiday_pre_num_days": 8,
-        "holiday_post_num_days": 3
-    },
-    regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
-)
+            seasonality={
+                "yearly_seasonality": 4,
+                "quarterly_seasonality": False,
+                "monthly_seasonality": False,
+                "weekly_seasonality": False,
+                "daily_seasonality": False
+            },
+            autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
+            events={
+                "holiday_lookup_countries": ["US"],
+                "holiday_pre_num_days": 8,
+                "holiday_post_num_days": 3
+            },
+            regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
+        )
 
 
         evaluation = EvaluationPeriodParam(
@@ -222,12 +222,12 @@ def run_greykite_realistic_forecast(
                     "TRAINING_WEEKS_USED": len(train_data),
                     "TRAINING_END_DATE": train_data["WEEK_BEGIN"].max(),
                     "GAP_WEEKS": gap_weeks
-                    })
-                    
-                except Exception as e:
+                })
+
+        except Exception as e:
             print(f"      Greykite error at {safe_week_str(target_week)}: {e}")
-                    continue
-                
+            continue
+
     return pd.DataFrame(results_rows)
 
 # ---------------------------
