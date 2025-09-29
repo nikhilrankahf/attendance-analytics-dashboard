@@ -57,6 +57,42 @@ def calculate_moving_average(df, window=4, attendance_col='WEEKLY_ATTENDANCE_RAT
     """
     return df[attendance_col].rolling(window=window, min_periods=1).mean().shift(shift)
 
+# --- NEW: safer week handling helpers ---
+
+def align_to_week_monday(ts: pd.Timestamp) -> pd.Timestamp:
+    """Align a timestamp to Monday start (W-MON)."""
+    if pd.isna(ts):
+        return pd.NaT
+    return ts.to_period("W-MON").start_time
+
+def coerce_week_begin(df: pd.DataFrame,
+                      week_col: str = "WEEK_BEGIN",
+                      weeknum_col: str = "WEEK_NUMBER") -> pd.DataFrame:
+    """
+    1) Try to parse WEEK_BEGIN as datetime (errors='coerce')
+    2) For any remaining NaT rows that have WEEK_NUMBER, derive from HF week
+    3) Align all to Monday week start (W-MON)
+    """
+    if week_col in df.columns:
+        df[week_col] = pd.to_datetime(df[week_col], errors="coerce")
+    else:
+        df[week_col] = pd.NaT
+
+    if weeknum_col in df.columns:
+        mask = df[week_col].isna() & df[weeknum_col].notna()
+        if mask.any():
+            df.loc[mask, week_col] = df.loc[mask, weeknum_col].apply(hf_week_to_datetime)
+
+    df[week_col] = df[week_col].apply(align_to_week_monday)
+    return df
+
+def safe_week_str(ts: pd.Timestamp, fmt: str = "%Y-W%V") -> str:
+    """Safe formatter for logs; never throws on NaT."""
+    try:
+        return ts.strftime(fmt) if pd.notna(ts) else "NaT"
+    except Exception:
+        return "NaT"
+
 # -----------------------------
 # Baseline realistic forecast (FALLBACK)
 # -----------------------------
@@ -73,8 +109,10 @@ def baseline_realistic_forecast(
     - Baseline = last available rolling mean computed only on data <= cutoff
       Implemented as precomputed rolling mean shifted by (gap+1) steps.
     """
+    df_group = df_group.dropna(subset=['WEEK_BEGIN']).copy()
     df_group = df_group.sort_values('WEEK_BEGIN').reset_index(drop=True)
-    forecast_start = pd.to_datetime(forecast_start_date)
+    forecast_start = pd.Timestamp(forecast_start_date)
+    forecast_start = align_to_week_monday(forecast_start)
 
     # Leakage-safe shifted rolling mean (shift=gap+1 -> 2)
     shift_steps = gap_weeks + 1
@@ -130,8 +168,10 @@ def run_greykite_realistic_forecast(
         print(f"    Skipping Greykite: insufficient total history ({len(df_group)} < {MIN_TRAIN_WEEKS})")
         return None
 
+    df_group = df_group.dropna(subset=['WEEK_BEGIN']).copy()
     df_group = df_group.sort_values('WEEK_BEGIN').reset_index(drop=True)
-    forecast_start = pd.to_datetime(forecast_start_date)
+    forecast_start = pd.Timestamp(forecast_start_date)
+    forecast_start = align_to_week_monday(forecast_start)
 
     # Winsorize target per segment (1–99 pct) for robustness
     lo, hi = df_group[actual_col].quantile([0.01, 0.99])
@@ -165,8 +205,8 @@ def run_greykite_realistic_forecast(
             continue
 
         print(
-            f"    Forecasting {target_week.strftime('%Y-W%U')} using {len(train_data)} weeks up to "
-            f"{train_data['WEEK_BEGIN'].max().strftime('%Y-W%U')} (gap={gap_weeks})"
+            f"    Forecasting {safe_week_str(target_week)} using {len(train_data)} weeks up to "
+            f"{safe_week_str(train_data['WEEK_BEGIN'].max())} (gap={gap_weeks})"
         )
 
         metadata = MetadataParam(
@@ -234,7 +274,7 @@ def run_greykite_realistic_forecast(
                 })
 
         except Exception as e:
-            print(f"      Greykite error at {target_week.strftime('%Y-W%U')}: {e}")
+            print(f"      Greykite error at {safe_week_str(target_week)}: {e}")
             # Continue loop; baseline fallback will cover outside this function
             continue
 
@@ -262,16 +302,21 @@ def main():
         print(f"Error reading CSV file: {e}")
         return
 
-    # Date column
-    if 'WEEK_BEGIN' not in df_attendance.columns and 'WEEK_NUMBER' in df_attendance.columns:
-        print("Converting WEEK_NUMBER to WEEK_BEGIN...")
-        df_attendance['WEEK_BEGIN'] = df_attendance['WEEK_NUMBER'].apply(hf_week_to_datetime)
-        print(f"Converted {len(df_attendance)} WEEK_NUMBER values to WEEK_BEGIN")
-    elif 'WEEK_BEGIN' in df_attendance.columns:
-        df_attendance['WEEK_BEGIN'] = pd.to_datetime(df_attendance['WEEK_BEGIN'])
-    else:
+    # Build/repair WEEK_BEGIN robustly and align to W-MON
+    if 'WEEK_NUMBER' not in df_attendance.columns and 'WEEK_BEGIN' not in df_attendance.columns:
         print("Error: Neither WEEK_BEGIN nor WEEK_NUMBER column found in data")
         return
+
+    df_attendance = coerce_week_begin(df_attendance, week_col="WEEK_BEGIN", weeknum_col="WEEK_NUMBER")
+
+    # Drop rows where WEEK_BEGIN is still NaT (unrecoverable)
+    bad_rows = df_attendance['WEEK_BEGIN'].isna().sum()
+    if bad_rows > 0:
+        print(f"Dropping {bad_rows} rows with unusable WEEK_BEGIN (NaT) after coercion")
+        df_attendance = df_attendance.dropna(subset=['WEEK_BEGIN'])
+
+    # Ensure sorted by aligned week
+    df_attendance = df_attendance.sort_values(['WEEK_BEGIN']).reset_index(drop=True)
 
     # Target column
     attendance_col = None
@@ -294,7 +339,7 @@ def main():
     df_attendance = df_attendance.drop_duplicates(subset=available_key_columns, keep='last')
 
     # Sort by week
-    df_attendance = df_attendance.sort_values(['WEEK_BEGIN'])
+    # Already sorted above
 
     print(f"After preprocessing: {df_attendance.shape}")
     print(f"Date range: {df_attendance['WEEK_BEGIN'].min()} to {df_attendance['WEEK_BEGIN'].max()}")
@@ -316,7 +361,7 @@ def main():
         print(f"\nProcessing: {work_location} - {shift_time} - {department_group}")
         print(f"Data points: {len(df_group)}")
 
-        df_group = df_group.reset index(drop=True)
+        df_group = df_group.reset_index(drop=True)
 
         # Always prepare a leakage-safe baseline column for later merges/eval
         df_group['MOVING_AVG_4WEEK_FORECAST'] = calculate_moving_average(
@@ -334,7 +379,7 @@ def main():
             fb = baseline_realistic_forecast(
                 df_group, actual_col=attendance_col, forecast_start_date='2024-01-01', gap_weeks=1, window=4
             )
-            if fb is None or fb empty:
+            if fb is None or fb.empty:
                 print("  No baseline could be produced (insufficient history before cutoffs). Skipping.")
                 continue
             # Attach identifiers
@@ -347,7 +392,7 @@ def main():
 
         # If we have Greykite results, merge with baseline & identifiers
         greykite_results['WORK_LOCATION'] = work_location
-        greykite_results['SHIFT_TIME'] = shift time
+        greykite_results['SHIFT_TIME'] = shift_time
         greykite_results['DEPARTMENT_GROUP'] = department_group
 
         merge_columns = ['WEEK_BEGIN', 'MOVING_AVG_4WEEK_FORECAST', attendance_col]
@@ -383,9 +428,9 @@ def main():
         final_results = final_results[available_output_columns]
 
         sort_columns = ['WEEK_BEGIN', 'WORK_LOCATION', 'SHIFT_TIME']
-        if 'DEPARTMENT_GROUP' in final_results columns:
+        if 'DEPARTMENT_GROUP' in final_results.columns:
             sort_columns.append('DEPARTMENT_GROUP')
-        final_results = final results.sort_values(sort_columns)
+        final_results = final_results.sort_values(sort_columns)
 
         output_filename = f"attendance_forecast_results_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         final_results.to_csv(output_filename, index=False)
