@@ -1,614 +1,422 @@
 #!/usr/bin/env python3
 """
-Enhanced Attendance Forecasting Script using Greykite
-- Incorporates HelloFresh-style implementation patterns
-- Uses US holiday effects and prediction intervals
-- Comprehensive evaluation with cross-validation
-- Thursday week start alignment
-- Rolling 1-week forecast horizon with gap rule
+Modified Attendance Greykite Integration Script (with baseline fallback)
+- T+2 with 1-week gap
+- Leakage-safe baseline
+- Robust CV alignment and features
 """
 
 import pandas as pd
 import numpy as np
-from datetime import datetime, date
+import matplotlib.pyplot as plt
+import datetime as dt
 import warnings
-from collections import defaultdict
-import plotly.io
 from sklearn.metrics import mean_absolute_error
 
 # Greykite imports
+from greykite.framework.templates.autogen.forecast_config import (
+    EvaluationPeriodParam, ForecastConfig, MetadataParam, ModelComponentsParam,
+    EvaluationMetricParam
+)
 from greykite.framework.templates.forecaster import Forecaster
 from greykite.framework.templates.model_templates import ModelTemplateEnum
-from greykite.framework.templates.autogen.forecast_config import ForecastConfig, MetadataParam
-from greykite.framework.templates.autogen.forecast_config import ModelComponentsParam, EvaluationMetricParam
-from greykite.framework.utils.result_summary import summarize_grid_search_results
 
 warnings.filterwarnings("ignore")
+plt.rcParams['figure.figsize'] = (12, 6)
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', None)
 
-def week_to_thursday_date(week_str: str) -> pd.Timestamp:
-    """Convert ISO-week string 'YYYY-Www' to the Thursday date of that week."""
-    year, week = map(int, week_str.split('-W'))
-    # ISO week starts on Monday, so Thursday is day 4
-    thursday = date.fromisocalendar(year, week, 4)
-    return pd.Timestamp(thursday)
+# -----------------------------
+# Helper functions
+# -----------------------------
+def datetime_to_hf_week(date_time: dt.datetime):
+    hf_datetime = date_time + dt.timedelta(days=2)
+    year, week, _ = hf_datetime.isocalendar()
+    return f'{year}-W{week:02d}'
 
-def prepare_data_for_greykite(df_group, actual_col='WEEKLY_ATTENDANCE_RATE'):
-    """
-    Prepare data for Greykite with Thursday week alignment and proper formatting.
-    """
-    df = df_group.dropna(subset=[actual_col]).copy()
-    
-    # Convert week numbers to Thursday dates (HelloFresh style)
-    df['WEEK_BEGIN'] = df['WEEK_NUMBER'].apply(week_to_thursday_date)
-    df['y'] = df[actual_col]
-    
-    # Sort by date and reset index
-    df = df.sort_values('WEEK_BEGIN').reset_index(drop=True)
-    
-    # Keep only necessary columns for Greykite
-    greykite_df = df[['WEEK_BEGIN', 'y', 'WEEK_NUMBER']].copy()
-    
-    return greykite_df, df
+def hf_week_to_datetime(hf_week: str):
+    return dt.datetime.strptime(hf_week + '-1', '%G-W%V-%w') - dt.timedelta(days=2)
 
-def run_enhanced_greykite_forecast(df_group, actual_col='WEEKLY_ATTENDANCE_RATE', 
-                                 forecast_horizon=5, coverage=0.95, plot=False,
-                                 target_year='2025'):
+def hf_week_add(hf_week: str, num_weeks: int):
+    return datetime_to_hf_week(hf_week_to_datetime(hf_week) + dt.timedelta(weeks=num_weeks))
+
+def hf_week_sub(hf_week: str, num_weeks: int):
+    return datetime_to_hf_week(hf_week_to_datetime(hf_week) - dt.timedelta(weeks=num_weeks))
+
+def current_hf_week():
+    return datetime_to_hf_week(dt.datetime.today())
+
+def hf_week_to_last_thursday_str(hf_week: str):
+    monday = hf_week_to_datetime(hf_week) - dt.timedelta(days=2)
+    return monday.strftime('%Y-%m-%d')
+
+def calculate_moving_average(df, window=4, attendance_col='WEEKLY_ATTENDANCE_RATE', shift=0):
     """
-    Enhanced Greykite forecasting with HelloFresh-style implementation.
-    
-    Parameters:
-    - df_group: DataFrame with attendance data
-    - actual_col: Column name for actual attendance values
-    - forecast_horizon: Number of weeks to forecast ahead
-    - coverage: Prediction interval coverage (0.95 = 95%)
-    - plot: Whether to generate plots
-    - target_year: Year to focus forecasts on
-    
-    Returns:
-    - Dictionary with forecast results, metrics, and diagnostics
+    Rolling mean with optional shift to avoid leakage.
+    For weekly T+2 with a 1-week blackout, shift=2.
     """
-    
-    # Prepare data
-    greykite_df, original_df = prepare_data_for_greykite(df_group, actual_col)
-    
-    if len(greykite_df) < 20:  # Need sufficient data for cross-validation
-        print(f"  Insufficient data: {len(greykite_df)} weeks (minimum 20 required)")
+    return df[attendance_col].rolling(window=window, min_periods=1).mean().shift(shift)
+
+# -----------------------------
+# Baseline realistic forecast (FALLBACK)
+# -----------------------------
+def baseline_realistic_forecast(
+    df_group,
+    actual_col='WEEKLY_ATTENDANCE_RATE',
+    forecast_start_date='2024-01-01',
+    gap_weeks=1,
+    window=4
+):
+    """
+    Leakage-safe baseline to mirror the realistic setup:
+    - For target_week, training cutoff = target_week - (gap+1) weeks
+    - Baseline = last available rolling mean computed only on data <= cutoff
+      Implemented as precomputed rolling mean shifted by (gap+1) steps.
+    """
+    df_group = df_group.sort_values('WEEK_BEGIN').reset_index(drop=True)
+    forecast_start = pd.to_datetime(forecast_start_date)
+
+    # Leakage-safe shifted rolling mean (shift=gap+1 -> 2)
+    shift_steps = gap_weeks + 1
+    df_group["BASELINE_MA4_S2"] = (
+        df_group[actual_col].rolling(window, min_periods=1).mean().shift(shift_steps)
+    )
+
+    target_rows = df_group[df_group["WEEK_BEGIN"] >= forecast_start].copy()
+    if target_rows.empty:
         return None
-    
-    print(f"  === ENHANCED GREYKITE ANALYSIS ===")
-    print(f"  Total historical data: {len(greykite_df)} weeks")
-    print(f"  Date range: {greykite_df['WEEK_BEGIN'].min().strftime('%Y-%m-%d')} to {greykite_df['WEEK_BEGIN'].max().strftime('%Y-%m-%d')}")
-    print(f"  Attendance stats: Mean={greykite_df['y'].mean():.2f}%, Std={greykite_df['y'].std():.2f}%")
-    print(f"  Forecast horizon: {forecast_horizon} weeks")
-    print(f"  Prediction interval coverage: {coverage*100:.0f}%")
-    
-    # Configure metadata with Thursday week start (HelloFresh style)
-    metadata = MetadataParam(
-        time_col="WEEK_BEGIN",
-        value_col="y",
-        freq="W-THU"  # Thursday week start
-    )
-    
-    # Enhanced model components with US holiday effects
-    model_components = ModelComponentsParam(
-        events={
-            "holiday_lookup_countries": ["US"],  # US holidays
-            "holiday_pre_num_days": 8,  # 8-day pre-holiday effect
-            "holiday_post_num_days": 2,  # 2-day post-holiday effect
-        }
-    )
-    
-    # Enhanced evaluation configuration
-    evaluation_config = EvaluationMetricParam(
-        cv_selection_metric="MeanAbsoluteError",  # Use standard metric name
-        cv_report_metrics=[
-            "MeanAbsoluteError",
-            "RootMeanSquaredError",
-            "Correlation"
-        ]
-    )
-    
-    # Create forecast configuration
-    config = ForecastConfig(
-        model_template=ModelTemplateEnum.AUTO.name,
-        forecast_horizon=forecast_horizon,
-        coverage=coverage,  # Prediction intervals
-        metadata_param=metadata,
-        model_components_param=model_components,
-        evaluation_metric_param=evaluation_config
-    )
-    
-    # Initialize forecaster and run
+
+    results = []
+    for _, r in target_rows.iterrows():
+        target_week = r["WEEK_BEGIN"]
+        cutoff = target_week - pd.Timedelta(weeks=gap_weeks + 1)
+        train_slice = df_group[df_group["WEEK_BEGIN"] <= cutoff]
+
+        if train_slice.empty:
+            # If absolutely no history before cutoff, we cannot forecast this target; skip it.
+            continue
+
+        baseline_value = r["BASELINE_MA4_S2"]  # already leakage-safe via shift
+        results.append({
+            "WEEK_BEGIN": target_week,
+            "ACTUAL_ATTENDANCE_RATE": r[actual_col],
+            "GREYKITE_FORECAST": np.nan,  # no model, fallback only
+            "MOVING_AVG_4WEEK_FORECAST": baseline_value,
+            "TRAINING_WEEKS_USED": len(train_slice),
+            "TRAINING_END_DATE": train_slice["WEEK_BEGIN"].max(),
+            "GAP_WEEKS": gap_weeks
+        })
+
+    return pd.DataFrame(results) if results else None
+
+# -----------------------------
+# Greykite realistic forecast
+# -----------------------------
+def run_greykite_realistic_forecast(
+    df_group,
+    actual_col='WEEKLY_ATTENDANCE_RATE',
+    forecast_start_date='2024-01-01',
+    gap_weeks=1
+):
+    """
+    Rolling-origin Greykite forecast:
+      - Train through target - (gap+1) weeks
+      - Skip `gap_weeks`
+      - Forecast horizon = gap_weeks+1 (take step index = gap_weeks)
+    """
+    MIN_TRAIN_WEEKS = 52
+
+    if len(df_group) < MIN_TRAIN_WEEKS:
+        print(f"    Skipping Greykite: insufficient total history ({len(df_group)} < {MIN_TRAIN_WEEKS})")
+        return None
+
+    df_group = df_group.sort_values('WEEK_BEGIN').reset_index(drop=True)
+    forecast_start = pd.to_datetime(forecast_start_date)
+
+    # Winsorize target per segment (1–99 pct) for robustness
+    lo, hi = df_group[actual_col].quantile([0.01, 0.99])
+    df_group[actual_col] = df_group[actual_col].clip(lo, hi)
+
+    # Leakage-safe shifted rolling features as regressors
+    shift_steps = gap_weeks + 1  # 2 for weekly T+2
+    df_group["ROLL_MEAN_4_S2"] = df_group[actual_col].rolling(4, min_periods=1).mean().shift(shift_steps)
+    df_group["ROLL_MEDIAN_4_S2"] = df_group[actual_col].rolling(4, min_periods=1).median().shift(shift_steps)
+
+    forecast_weeks = df_group[df_group['WEEK_BEGIN'] >= forecast_start].copy()
+    if len(forecast_weeks) == 0:
+        print(f"    No data found from {forecast_start_date} onwards")
+        return None
+
+    print(f"    Running Greykite for {len(forecast_weeks)} weeks from {forecast_start_date} (gap={gap_weeks})")
+
+    results = []
     forecaster = Forecaster()
-    
-    print(f"  Running Greykite with cross-validation...")
-    try:
-        result = forecaster.run_forecast_config(
-            df=greykite_df,
-            config=config
+
+    for _, row in forecast_weeks.iterrows():
+        target_week = row['WEEK_BEGIN']
+        actual_value = row[actual_col]
+
+        # Training cutoff
+        training_cutoff = target_week - pd.Timedelta(weeks=gap_weeks + 1)
+        train_data = df_group[df_group['WEEK_BEGIN'] <= training_cutoff].copy()
+
+        if len(train_data) < MIN_TRAIN_WEEKS:
+            print(f"    Skip target {target_week.strftime('%Y-W%U')}: train weeks {len(train_data)} < {MIN_TRAIN_WEEKS}")
+            continue
+
+        print(
+            f"    Forecasting {target_week.strftime('%Y-W%U')} using {len(train_data)} weeks up to "
+            f"{train_data['WEEK_BEGIN'].max().strftime('%Y-W%U')} (gap={gap_weeks})"
         )
-        
-        print(f"  ✓ Greykite model completed successfully")
-        
-        # Extract results
-        ts = result.timeseries
-        backtest = result.backtest
-        grid_search = result.grid_search
-        forecast = result.forecast
-        model = result.model
-        
-        # Comprehensive evaluation metrics
-        print(f"\n  === CROSS-VALIDATION RESULTS ===")
-        cv_results = summarize_grid_search_results(
-            grid_search=grid_search,
-            decimals=3,
-            cv_report_metrics=["MeanAbsoluteError", "RootMeanSquaredError"],
-            column_order=["rank", "mean_test", "mean_train", "mean_fit_time", "params"]
+
+        metadata = MetadataParam(
+            time_col="WEEK_BEGIN",
+            value_col=actual_col,
+            freq="W-MON"  # align to Monday week-begin
         )
-        
-        if not cv_results.empty:
-            print(f"  Best model CV metrics:")
-            best_row = cv_results.iloc[0]
-            print(f"    MAE: {best_row.get('mean_test_MeanAbsoluteError', 'N/A')}")
-            print(f"    RMSE: {best_row.get('mean_test_RootMeanSquaredError', 'N/A')}")
-        
-        # Backtest evaluation
-        print(f"\n  === BACKTEST EVALUATION ===")
-        backtest_metrics = defaultdict(list)
-        if hasattr(backtest, 'train_evaluation') and hasattr(backtest, 'test_evaluation'):
-            for metric, value in backtest.train_evaluation.items():
-                backtest_metrics[metric].append(value)
-                backtest_metrics[metric].append(backtest.test_evaluation[metric])
-            
-            metrics_df = pd.DataFrame(backtest_metrics, index=["train", "test"]).T
-            print(f"  Train vs Test metrics:")
-            for metric in ['MeanAbsoluteError', 'RootMeanSquaredError']:
-                if metric in metrics_df.index:
-                    train_val = metrics_df.loc[metric, 'train']
-                    test_val = metrics_df.loc[metric, 'test']
-                    print(f"    {metric}: Train={train_val:.3f}, Test={test_val:.3f}")
-        
-        # Generate rolling 1-week forecasts for target year
-        print(f"\n  === GENERATING ROLLING 1-WEEK FORECASTS ===")
-        
-        # Find target year weeks in original data
-        target_weeks = original_df[original_df['WEEK_NUMBER'].str.startswith(target_year)].copy()
-        if target_weeks.empty:
-            print(f"  No {target_year} weeks found in data")
-            future_results = pd.DataFrame()
-        else:
-            print(f"  Generating rolling forecasts for {len(target_weeks)} weeks in {target_year}")
-            
-            rolling_forecasts = []
-            
-            for i, (_, target_week) in enumerate(target_weeks.iterrows()):
-                # Find position in greykite_df
-                target_positions = greykite_df[greykite_df['WEEK_NUMBER'] == target_week['WEEK_NUMBER']].index
-                if len(target_positions) == 0:
-                    continue
-                    
-                target_pos = target_positions[0]
-                
-                # Use data up to 2 weeks before target (1-week gap rule)
-                train_end = target_pos - 2
-                if train_end < 20:  # Need minimum training data
-                    continue
-                    
-                train_data = greykite_df.iloc[:train_end + 1].copy()
-                
-                try:
-                    # Create future dataframe for just this week
-                    future_df = result.timeseries.make_future_dataframe(
-                        periods=1,
-                        include_history=False
-                    )
-                    # Adjust the future date to match target week
-                    future_df['ts'] = [target_week['WEEK_BEGIN']]
-                    
-                    # Predict for this specific week
-                    week_prediction = model.predict(future_df)
-                    
-                    # Extract forecast values
-                    forecast_val = week_prediction['forecast'].iloc[0]
-                    lower_val = week_prediction.get('forecast_lower', [None]).iloc[0] if 'forecast_lower' in week_prediction.columns else None
-                    upper_val = week_prediction.get('forecast_upper', [None]).iloc[0] if 'forecast_upper' in week_prediction.columns else None
-                    
-                    rolling_forecasts.append({
-                        'WEEK_BEGIN': target_week['WEEK_BEGIN'],
-                        'WEEK_NUMBER': target_week['WEEK_NUMBER'],
-                        'forecast': forecast_val,
-                        'forecast_lower': lower_val,
-                        'forecast_upper': upper_val
-                    })
-                    
-                except Exception as e:
-                    print(f"    Error forecasting {target_week['WEEK_NUMBER']}: {str(e)[:50]}...")
-                    continue
-                
-                if (i + 1) % 10 == 0:
-                    print(f"    Completed {i + 1}/{len(target_weeks)} rolling forecasts")
-            
-            future_results = pd.DataFrame(rolling_forecasts)
-        
-        if len(future_results) > 0:
-            print(f"  Generated {len(future_results)} rolling forecasts for {target_year}")
-            print(f"  Forecast range: {future_results['forecast'].min():.2f}% to {future_results['forecast'].max():.2f}%")
-            print(f"  Forecast mean: {future_results['forecast'].mean():.2f}%")
-            
-            if 'forecast_lower' in future_results.columns and future_results['forecast_lower'].notna().any():
-                valid_intervals = future_results.dropna(subset=['forecast_lower', 'forecast_upper'])
-                if len(valid_intervals) > 0:
-                    avg_interval_width = (valid_intervals['forecast_upper'] - valid_intervals['forecast_lower']).mean()
-                    print(f"  Average prediction interval width: {avg_interval_width:.2f}%")
-        else:
-            print(f"  No forecasts generated for {target_year}")
-        
-        # Prepare return results
-        results = {
-            'future_forecasts': future_results,
-            'cv_results': cv_results,
-            'backtest_metrics': metrics_df if 'metrics_df' in locals() else None,
-            'model_result': result,
-            'data_summary': {
-                'total_weeks': len(greykite_df),
-                'date_range': (greykite_df['WEEK_BEGIN'].min(), greykite_df['WEEK_BEGIN'].max()),
-                'attendance_stats': {
-                    'mean': greykite_df['y'].mean(),
-                    'std': greykite_df['y'].std(),
-                    'min': greykite_df['y'].min(),
-                    'max': greykite_df['y'].max()
+
+        model_components = ModelComponentsParam(
+            seasonality={
+                "yearly_seasonality": {
+                    "seas_names": ["yearly"],
+                    "fourier_series": {"yearly": {"period": 52.18, "order": 4}}
                 }
-            }
-        }
-        
-        return results
-        
-    except Exception as e:
-        print(f"  ✗ Error in Greykite forecasting: {str(e)}")
-        return None
+                # weekly_seasonality intentionally removed
+            },
+            autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
+            events={
+                "holiday_lookup_countries": ["US"],
+                "holiday_pre_num_days": 8,
+                "holiday_post_num_days": 3,
+                # "daily_event_df_dict": {"ops_calendar": ops_df}  # optional custom calendar
+            },
+            regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
+        )
 
-def compare_with_simple_baselines(df_group, target_year='2025', actual_col='WEEKLY_ATTENDANCE_RATE'):
-    """
-    Compare Greykite results with simple baseline methods.
-    """
-    print(f"\n  === BASELINE COMPARISON ===")
-    
-    df = df_group.dropna(subset=[actual_col]).copy()
-    df['WEEK_BEGIN'] = df['WEEK_NUMBER'].apply(week_to_thursday_date)
-    df['y'] = df[actual_col]
-    df = df.sort_values('WEEK_BEGIN').reset_index(drop=True)
-    
-    # Find target year data for comparison
-    target_weeks = df[df['WEEK_NUMBER'].str.startswith(target_year)].copy()
-    if target_weeks.empty:
-        print(f"  No data found for {target_year}")
-        return None
-    
-    baselines = {}
-    
-    # Historical mean baseline
-    historical_mean = df['y'].mean()
-    baselines['historical_mean'] = {
-        'forecast': [historical_mean] * len(target_weeks),
-        'mae': mean_absolute_error(target_weeks['y'], [historical_mean] * len(target_weeks))
-    }
-    
-    # Recent 12-week mean
-    recent_mean = df['y'].tail(12).mean()
-    baselines['recent_12w_mean'] = {
-        'forecast': [recent_mean] * len(target_weeks),
-        'mae': mean_absolute_error(target_weeks['y'], [recent_mean] * len(target_weeks))
-    }
-    
-    # Recent 8-week median
-    recent_median = df['y'].tail(8).median()
-    baselines['recent_8w_median'] = {
-        'forecast': [recent_median] * len(target_weeks),
-        'mae': mean_absolute_error(target_weeks['y'], [recent_median] * len(target_weeks))
-    }
-    
-    print(f"  Baseline MAE comparison:")
-    for name, metrics in baselines.items():
-        print(f"    {name}: {metrics['mae']:.2f}%")
-    
-    return baselines
+        evaluation = EvaluationPeriodParam(
+            test_horizon=2,                         # exactly T+2
+            periods_between_train_test=1,           # 1-week blackout
+            cv_horizon=2,
+            cv_min_train_periods=MIN_TRAIN_WEEKS,
+            cv_expanding_window=True,
+            cv_use_most_recent_splits=True,
+            cv_periods_between_splits=1,
+            cv_periods_between_train_test=1,
+            cv_max_splits=3
+        )
 
-def main():
-    """
-    Main execution function with enhanced Greykite implementation.
-    """
-    print("=== ENHANCED ATTENDANCE FORECASTING WITH GREYKITE ===")
-    print("Incorporating HelloFresh-style patterns:")
-    print("- US holiday effects")
-    print("- Prediction intervals") 
-    print("- Cross-validation")
-    print("- Thursday week alignment")
-    print("- Rolling 1-week forecasting with gap rule")
-    print("- Processing ALL combinations of location, shift, and department")
-    print("- Generating forecasts for BOTH 2024 and 2025")
-    
-    # Load data
-    input_file = '/Users/nikhil.ranka/attendance-analytics-dashboard/Labor_Management-Greykite_Input.csv'
-    
-    try:
-        df = pd.read_csv(input_file)
-        print(f"\n✓ Loaded data: {len(df)} records from {input_file}")
-        print(f"Available columns: {list(df.columns)}")
-    except FileNotFoundError:
-        print(f"✗ Error: Could not find {input_file}")
-        return
-    
-    # Identify actuals column (prefer new name with legacy fallbacks)
-    preferred_actual_cols = [
-        'WEEKLY_ATTENDANCE_RATE',
-        'Weekly_attendance_rate',
-        'ATTENDANCE_RATE_WITH_OUTLIER'
-    ]
-    actual_col = None
-    for col in preferred_actual_cols:
-        if col in df.columns:
-            actual_col = col
-            break
-    if actual_col is None:
-        print("✗ Error: Could not find an attendance rate column. Expected one of:", preferred_actual_cols)
-        return
-
-    print(f"Using actuals column: '{actual_col}'")
-
-    # Identify all unique combinations
-    grouping_cols = ['WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP']
-    available_cols = [col for col in grouping_cols if col in df.columns]
-    
-    if not available_cols:
-        print("✗ Error: Required grouping columns not found in data")
-        return
-    
-    print(f"\nGrouping by: {available_cols}")
-    
-    # Get all unique combinations
-    combinations = df[available_cols].drop_duplicates().reset_index(drop=True)
-    print(f"Found {len(combinations)} unique combinations to process")
-    
-    # Display combinations
-    for i, (_, combo) in enumerate(combinations.iterrows()):
-        combo_str = ", ".join([f"{col}='{combo[col]}'" for col in available_cols])
-        print(f"  {i+1}. {combo_str}")
-    
-    # Process all combinations
-    all_output_data = []
-    successful_combinations = 0
-    
-    for combo_idx, (_, combination) in enumerate(combinations.iterrows()):
-        print(f"\n" + "="*80)
-        print(f"PROCESSING COMBINATION {combo_idx + 1}/{len(combinations)}")
-        combo_str = ", ".join([f"{col}='{combination[col]}'" for col in available_cols])
-        print(f"{combo_str}")
-        print(f"="*80)
-        
-        # Filter data for this combination
-        filtered_df = df.copy()
-        for col in available_cols:
-            filtered_df = filtered_df[filtered_df[col] == combination[col]]
-        
-        print(f"Filtered data: {len(filtered_df)} records")
-        
-        if len(filtered_df) < 20:
-            print("✗ Insufficient data for analysis (minimum 20 records required)")
-            continue
-        
-        # Run enhanced Greykite forecasting for both 2024 and 2025
-        target_years = ['2024', '2025']
-        all_results = {}
-        combination_successful = False
-        
-        for target_year in target_years:
-            print(f"    Processing {target_year} forecasts...")
-            results = run_enhanced_greykite_forecast(
-                df_group=filtered_df,
-                actual_col=actual_col,
-                forecast_horizon=1,  # 1-week horizon for weekly planning
-                coverage=0.95,  # 95% prediction intervals
-                target_year=target_year
+        try:
+            result = forecaster.run_forecast_config(
+                df=train_data,
+                config=ForecastConfig(
+                    model_template=ModelTemplateEnum.AUTO.name,
+                    forecast_horizon=gap_weeks + 1,  # =2; take step index 1
+                    coverage=0.95,
+                    metadata_param=metadata,
+                    model_components_param=model_components,
+                    evaluation_metric_param=EvaluationMetricParam(
+                        cv_selection_metric="MeanAbsoluteError"
+                    ),
+                    evaluation_period_param=evaluation
+                )
             )
-            
-            if results is not None:
-                all_results[target_year] = results
-                combination_successful = True
-                print(f"    ✓ {target_year} forecasts completed")
-            else:
-                print(f"    ✗ {target_year} forecasting failed")
-        
-        if not combination_successful:
-            print("✗ Greykite forecasting failed for all years in this combination")
+
+            forecast_df = result.forecast.df
+            if len(forecast_df) > gap_weeks:
+                forecast_value = forecast_df.iloc[gap_weeks]['forecast']
+                results.append({
+                    'WEEK_BEGIN': target_week,
+                    'ACTUAL_ATTENDANCE_RATE': actual_value,
+                    'GREYKITE_FORECAST': forecast_value,
+                    'TRAINING_WEEKS_USED': len(train_data),
+                    'TRAINING_END_DATE': train_data['WEEK_BEGIN'].max(),
+                    'GAP_WEEKS': gap_weeks
+                })
+
+        except Exception as e:
+            print(f"      Greykite error at {target_week.strftime('%Y-W%U')}: {e}")
+            # Continue loop; baseline fallback will cover outside this function
             continue
-        
-        successful_combinations += 1
-        
-        # Compare with baselines for both years
-        all_baselines = {}
-        for target_year in target_years:
-            if target_year in all_results:
-                baselines = compare_with_simple_baselines(filtered_df, target_year=target_year, actual_col=actual_col)
-                if baselines:
-                    all_baselines[target_year] = baselines
-        
-        # Prepare output data for this combination (process all years)
-        for target_year, results in all_results.items():
-            if results and 'future_forecasts' in results:
-                future_forecasts = results['future_forecasts']
-                
-                for _, row in future_forecasts.iterrows():
-                    # Find matching row in original data to get actual values and other forecasts
-                    original_row = filtered_df[filtered_df['WEEK_NUMBER'] == row['WEEK_NUMBER']]
-                    
-                    if not original_row.empty:
-                        orig = original_row.iloc[0]
-                        
-                        # Create output row with actual combination values
-                        output_row = {
-                            'week_number': row['WEEK_NUMBER']
-                        }
-                        
-                        # Add combination identifiers
-                        for col in available_cols:
-                            output_row[col.lower()] = combination[col]
-                        
-                        # Add forecasting results
-                        output_row.update({
-                            'actual_attendance': orig.get(actual_col, None),
-                            'greykite_forecast': row['forecast']
-                        })
-                        
-                        # Add prediction intervals if available
-                        if 'forecast_lower' in row:
-                            output_row['greykite_forecast_lower_95'] = row['forecast_lower']
-                            output_row['greykite_forecast_upper_95'] = row['forecast_upper']
-                        
-                        # Add other forecasting models from input data
-                        other_forecast_columns = [
-                            'FOUR_WEEK_ROLLING_AVG',
-                            'SIX_WEEK_ROLLING_AVG', 
-                            'EXPONENTIAL_SMOOTHING_0_2',
-                            'EXPONENTIAL_SMOOTHING_0_4',
-                            'EXPONENTIAL_SMOOTHING_0_6',
-                            'EXPONENTIAL_SMOOTHING_0_8',
-                            'EXPONENTIAL_SMOOTHING_1'
-                        ]
-                        
-                        for col in other_forecast_columns:
-                            if col in orig:
-                                # Use more readable column names
-                                clean_name = col.lower().replace('_', '_')
-                                if 'exponential' in clean_name:
-                                    # Extract alpha value for cleaner naming
-                                    alpha = col.split('_')[-1].replace('_', '.')
-                                    clean_name = f'exponential_smoothing_alpha_{alpha}'
-                                output_row[clean_name] = orig[col]
-                        
-                        all_output_data.append(output_row)
-                    else:
-                        # If no original data found, still include Greykite forecast
-                        output_row = {
-                            'week_number': row['WEEK_NUMBER']
-                        }
-                        
-                        # Add combination identifiers
-                        for col in available_cols:
-                            output_row[col.lower()] = combination[col]
-                        
-                        # Add forecasting results
-                        output_row.update({
-                            'actual_attendance': None,
-                            'greykite_forecast': row['forecast']
-                        })
-                        
-                        if 'forecast_lower' in row:
-                            output_row['greykite_forecast_lower_95'] = row['forecast_lower']
-                            output_row['greykite_forecast_upper_95'] = row['forecast_upper']
-                        
-                        all_output_data.append(output_row)
-    
-    print(f"\n" + "="*80)
-    print(f"PROCESSING COMPLETE")
-    print(f"Successfully processed: {successful_combinations}/{len(combinations)} combinations")
-    print(f"="*80)
-    
-    # Create output DataFrame
-    if all_output_data:
-        output_df = pd.DataFrame(all_output_data)
-        
-        # Generate output filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"enhanced_attendance_forecast_all_combinations_2024_2025_{timestamp}.csv"
-        
-        # Save results
-        output_df.to_csv(output_file, index=False)
-        print(f"\n✓ Enhanced forecasts saved to: {output_file}")
-        print(f"  Records: {len(output_df)}")
-        print(f"  Combinations processed: {successful_combinations}")
-        print(f"  Columns: {list(output_df.columns)}")
-        
-        # Display sample results
-        print(f"\nSample forecast results (first 10 records):")
-        # Show key columns for readability
-        display_cols = ['week_number']
-        
-        # Add grouping columns
-        for col in available_cols:
-            col_name = col.lower()
-            if col_name in output_df.columns:
-                display_cols.append(col_name)
-        
-        # Add forecast columns
-        forecast_cols = ['actual_attendance', 'greykite_forecast']
-        if 'greykite_forecast_lower_95' in output_df.columns:
-            forecast_cols.extend(['greykite_forecast_lower_95', 'greykite_forecast_upper_95'])
-        
-        display_cols.extend(forecast_cols)
-        
-        # Add a couple other forecast models for comparison
-        other_models = ['four_week_rolling_avg', 'exponential_smoothing_alpha_0.4']
-        for col in other_models:
-            if col in output_df.columns:
-                display_cols.append(col)
-        
-        # Filter display columns to only those that exist
-        display_cols = [col for col in display_cols if col in output_df.columns]
-        
-        print(output_df[display_cols].head(10).to_string(index=False, float_format='%.2f'))
-        
-        # Summary statistics
-        print(f"\nOverall Forecast Summary:")
-        print(f"  Total forecasts generated: {len(output_df)}")
-        print(f"  Greykite forecast: Mean={output_df['greykite_forecast'].mean():.2f}%, Std={output_df['greykite_forecast'].std():.2f}%")
-        print(f"  Greykite range: {output_df['greykite_forecast'].min():.2f}% to {output_df['greykite_forecast'].max():.2f}%")
-        
-        if 'actual_attendance' in output_df.columns and output_df['actual_attendance'].notna().any():
-            actual_data = output_df.dropna(subset=['actual_attendance'])
-            print(f"  Actual attendance: Mean={actual_data['actual_attendance'].mean():.2f}%, Std={actual_data['actual_attendance'].std():.2f}%")
-            
-            # Calculate MAE for Greykite vs actual
-            greykite_mae = abs(actual_data['greykite_forecast'] - actual_data['actual_attendance']).mean()
-            print(f"  Overall Greykite MAE vs Actual: {greykite_mae:.2f}%")
-        
-        if 'greykite_forecast_lower_95' in output_df.columns:
-            valid_intervals = output_df.dropna(subset=['greykite_forecast_lower_95', 'greykite_forecast_upper_95'])
-            if len(valid_intervals) > 0:
-                avg_interval = (valid_intervals['greykite_forecast_upper_95'] - valid_intervals['greykite_forecast_lower_95']).mean()
-                print(f"  Average 95% prediction interval width: {avg_interval:.2f}%")
-        
-        # Summary by combination
-        print(f"\nSummary by Combination:")
-        grouping_cols_lower = [col.lower() for col in available_cols if col.lower() in output_df.columns]
-        if grouping_cols_lower:
-            combo_summary = output_df.groupby(grouping_cols_lower).agg({
-                'greykite_forecast': ['count', 'mean', 'std'],
-                'actual_attendance': 'mean'
-            }).round(2)
-            print(combo_summary.head(10))
-        
-        # Compare forecast models if available
-        forecast_models = [col for col in output_df.columns if 'forecast' in col.lower() or 'smoothing' in col.lower() or 'rolling' in col.lower()]
-        forecast_models = [col for col in forecast_models if col not in ['greykite_forecast', 'greykite_forecast_lower_95', 'greykite_forecast_upper_95']]
-        
-        if forecast_models and 'actual_attendance' in output_df.columns:
-            print(f"\nModel Comparison (MAE vs Actual):")
-            actual_data = output_df.dropna(subset=['actual_attendance'])
-            if len(actual_data) > 0:
-                for model in forecast_models[:5]:  # Show top 5 models
-                    if model in actual_data.columns and actual_data[model].notna().any():
-                        model_mae = abs(actual_data[model] - actual_data['actual_attendance']).mean()
-                        print(f"  {model}: {model_mae:.2f}%")
+
+    return pd.DataFrame(results) if results else None
+
+# -----------------------------
+# Main
+# -----------------------------
+def main():
+    """Run the attendance forecasting script with Greykite + baseline fallback"""
+
+    csv_path = "/Users/nikhil.ranka/attendance-analytics-dashboard/Labor_Management-Greykite_Input.csv"
+
+    try:
+        df_attendance = pd.read_csv(csv_path)
+        print(f"Successfully loaded data from {csv_path}")
+        print(f"Data shape: {df_attendance.shape}")
+        print(f"Columns: {list(df_attendance.columns)}")
+        print(f"Working directory: {csv_path}")
+    except FileNotFoundError:
+        print(f"Error: Could not find file {csv_path}")
+        print(f"Current working directory files: {[f for f in __import__('os').listdir('.') if f.endswith('.csv')]}")
+        return
+    except Exception as e:
+        print(f"Error reading CSV file: {e}")
+        return
+
+    # Date column
+    if 'WEEK_BEGIN' not in df_attendance.columns and 'WEEK_NUMBER' in df_attendance.columns:
+        print("Converting WEEK_NUMBER to WEEK_BEGIN...")
+        df_attendance['WEEK_BEGIN'] = df_attendance['WEEK_NUMBER'].apply(hf_week_to_datetime)
+        print(f"Converted {len(df_attendance)} WEEK_NUMBER values to WEEK_BEGIN")
+    elif 'WEEK_BEGIN' in df_attendance.columns:
+        df_attendance['WEEK_BEGIN'] = pd.to_datetime(df_attendance['WEEK_BEGIN'])
     else:
-        print("\n✗ No forecasts generated - no combinations had sufficient data")
-    
-    print(f"\n" + "="*80)
-    print(f"ENHANCED GREYKITE ANALYSIS COMPLETE")
-    print(f"Processed {successful_combinations} combinations successfully")
-    print(f"="*80)
+        print("Error: Neither WEEK_BEGIN nor WEEK_NUMBER column found in data")
+        return
+
+    # Target column
+    attendance_col = None
+    if 'ATTENDANCE_RATE_WITH_OUTLIER' in df_attendance.columns:
+        attendance_col = 'ATTENDANCE_RATE_WITH_OUTLIER'
+    elif 'WEEKLY_ATTENDANCE_RATE' in df_attendance.columns:
+        attendance_col = 'WEEKLY_ATTENDANCE_RATE'
+    else:
+        print("Error: No attendance rate column found in data")
+        return
+
+    # Basic filtering
+    df_attendance = df_attendance[df_attendance[attendance_col] < 130]
+
+    # De-dup
+    key_columns = ['WEEK_NUMBER', 'WORK_LOCATION', 'SHIFT_TIME']
+    if 'DEPARTMENT_GROUP' in df_attendance.columns:
+        key_columns.append('DEPARTMENT_GROUP')
+    available_key_columns = [col for col in key_columns if col in df_attendance.columns]
+    df_attendance = df_attendance.drop_duplicates(subset=available_key_columns, keep='last')
+
+    # Sort by week
+    df_attendance = df_attendance.sort_values(['WEEK_BEGIN'])
+
+    print(f"After preprocessing: {df_attendance.shape}")
+    print(f"Date range: {df_attendance['WEEK_BEGIN'].min()} to {df_attendance['WEEK_BEGIN'].max()}")
+
+    # Group columns for iteration
+    group_columns = ['WORK_LOCATION', 'SHIFT_TIME']
+    if 'DEPARTMENT_GROUP' in df_attendance.columns:
+        group_columns.append('DEPARTMENT_GROUP')
+
+    all_results = []
+
+    for group_values, df_group in df_attendance.groupby(group_columns):
+        if len(group_columns) == 3:
+            work_location, shift_time, department_group = group_values
+        else:
+            work_location, shift_time = group_values
+            department_group = 'Unknown'
+
+        print(f"\nProcessing: {work_location} - {shift_time} - {department_group}")
+        print(f"Data points: {len(df_group)}")
+
+        df_group = df_group.reset index(drop=True)
+
+        # Always prepare a leakage-safe baseline column for later merges/eval
+        df_group['MOVING_AVG_4WEEK_FORECAST'] = calculate_moving_average(
+            df_group, window=4, attendance_col=attendance_col, shift=2
+        )
+
+        # --- Try Greykite ---
+        greykite_results = run_greykite_realistic_forecast(
+            df_group, actual_col=attendance_col, forecast_start_date='2024-01-01', gap_weeks=1
+        )
+
+        # --- Fallback if Greykite unavailable or returned no rows ---
+        if greykite_results is None or greykite_results.empty:
+            print("  Using baseline fallback for this segment.")
+            fb = baseline_realistic_forecast(
+                df_group, actual_col=attendance_col, forecast_start_date='2024-01-01', gap_weeks=1, window=4
+            )
+            if fb is None or fb empty:
+                print("  No baseline could be produced (insufficient history before cutoffs). Skipping.")
+                continue
+            # Attach identifiers
+            fb['WORK_LOCATION'] = work_location
+            fb['SHIFT_TIME'] = shift_time
+            fb['DEPARTMENT_GROUP'] = department_group
+            # Already has MOVING_AVG_4WEEK_FORECAST from baseline function
+            all_results.append(fb)
+            continue
+
+        # If we have Greykite results, merge with baseline & identifiers
+        greykite_results['WORK_LOCATION'] = work_location
+        greykite_results['SHIFT_TIME'] = shift time
+        greykite_results['DEPARTMENT_GROUP'] = department_group
+
+        merge_columns = ['WEEK_BEGIN', 'MOVING_AVG_4WEEK_FORECAST', attendance_col]
+        if 'WEEK_NUMBER' in df_group.columns:
+            merge_columns.append('WEEK_NUMBER')
+
+        merged_results = greykite_results.merge(
+            df_group[merge_columns],
+            on='WEEK_BEGIN',
+            how='left'
+        ).rename(columns={attendance_col: 'ACTUAL_ATTENDANCE_RATE'})
+
+        all_results.append(merged_results)
+
+        # Accuracy metrics (MAE) vs. leakage-safe baseline (if both present)
+        valid = merged_results.dropna(subset=['ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST'])
+        if len(valid) > 0:
+            mae_gk = mean_absolute_error(valid['ACTUAL_ATTENDANCE_RATE'], valid['GREYKITE_FORECAST'])
+            mae_ma = mean_absolute_error(valid['ACTUAL_ATTENDANCE_RATE'], valid['MOVING_AVG_4WEEK_FORECAST'])
+            print(f"  Greykite MAE: {mae_gk:.4f}")
+            print(f"  Shifted MA(4) MAE: {mae_ma:.4f}")
+
+    # --- Collate & export ---
+    if all_results:
+        final_results = pd.concat(all_results, ignore_index=True)
+
+        output_columns = [
+            'WEEK_BEGIN', 'WEEK_NUMBER', 'WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP',
+            'ACTUAL_ATTENDANCE_RATE', 'GREYKITE_FORECAST', 'MOVING_AVG_4WEEK_FORECAST',
+            'TRAINING_WEEKS_USED', 'TRAINING_END_DATE', 'GAP_WEEKS'
+        ]
+        available_output_columns = [c for c in output_columns if c in final_results.columns]
+        final_results = final_results[available_output_columns]
+
+        sort_columns = ['WEEK_BEGIN', 'WORK_LOCATION', 'SHIFT_TIME']
+        if 'DEPARTMENT_GROUP' in final_results columns:
+            sort_columns.append('DEPARTMENT_GROUP')
+        final_results = final results.sort_values(sort_columns)
+
+        output_filename = f"attendance_forecast_results_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        final_results.to_csv(output_filename, index=False)
+
+        print(f"\n=== RESULTS SUMMARY ===")
+        print(f"Total records processed: {len(final_results)}")
+        if {'WORK_LOCATION','SHIFT_TIME','DEPARTMENT_GROUP'}.issubset(final_results.columns):
+            print(f"Unique combinations: {len(final_results.groupby(['WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP']))}")
+        print(f"Date range: {final_results['WEEK_BEGIN'].min()} to {final_results['WEEK_BEGIN'].max()}")
+        print(f"Results saved to: {output_filename}")
+
+        print(f"\nSample results:")
+        print(final_results.head(10).to_string(index=False))
+
+        # Overall accuracy summary where both forecasts exist
+        both_mask = final_results[['ACTUAL_ATTENDANCE_RATE','GREYKITE_FORECAST','MOVING_AVG_4WEEK_FORECAST']].notna().all(axis=1)
+        valid_final = final_results.loc[both_mask]
+        if len(valid_final) > 0:
+            overall_mae_gk = mean_absolute_error(valid_final['ACTUAL_ATTENDANCE_RATE'], valid_final['GREYKITE_FORECAST'])
+            overall_mae_ma = mean_absolute_error(valid_final['ACTUAL_ATTENDANCE_RATE'], valid_final['MOVING_AVG_4WEEK_FORECAST'])
+            print(f"\n=== OVERALL ACCURACY (where both exist) ===")
+            print(f"Overall Greykite MAE: {overall_mae_gk:.4f}")
+            print(f"Overall Shifted MA(4) MAE: {overall_mae_ma:.4f}")
+            if overall_mae_gk < overall_mae_ma:
+                print("Greykite performs better overall")
+            else:
+                print("Shifted Moving Average performs better overall")
+        else:
+            print("\nNo rows had both Greykite and baseline forecasts; only baseline fallback was used for some segments.")
+    else:
+        print("No results generated. Please check your data and requirements.")
 
 if __name__ == "__main__":
     main()
-
