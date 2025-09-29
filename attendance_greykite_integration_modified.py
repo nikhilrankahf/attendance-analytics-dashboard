@@ -135,7 +135,7 @@ def run_greykite_realistic_forecast(
 
     results_rows = []
     forecaster = Forecaster()
-
+    
     for _, row in forecast_weeks.iterrows():
         target_week = row["WEEK_BEGIN"]
         actual_value = row[actual_col]
@@ -220,12 +220,12 @@ def run_greykite_realistic_forecast(
                     "TRAINING_WEEKS_USED": len(train_data),
                     "TRAINING_END_DATE": train_data["WEEK_BEGIN"].max(),
                     "GAP_WEEKS": gap_weeks
-                })
-
-        except Exception as e:
+                    })
+                    
+                except Exception as e:
             print(f"      Greykite error at {safe_week_str(target_week)}: {e}")
-            continue
-
+                    continue
+                
     return pd.DataFrame(results_rows)
 
 # ---------------------------
@@ -406,7 +406,7 @@ def assemble_output_rows(
 # ---------------------------
 def main():
     print("=== ENHANCED ATTENDANCE FORECASTING WITH GREYKITE (OLD CSV SCHEMA) ===")
-
+    
     # Load data
     input_file = "/Users/nikhil.ranka/attendance-analytics-dashboard/Labor_Management-Greykite_Input.csv"
     try:
@@ -416,7 +416,7 @@ def main():
     except FileNotFoundError:
         print(f"✗ Error: Could not find {input_file}")
         return
-
+    
     # Identify actuals column
     preferred_actual_cols = [
         "WEEKLY_ATTENDANCE_RATE",
@@ -459,7 +459,7 @@ def main():
         print("✗ Error: Required grouping columns not found in data")
         return
     print(f"\nGrouping by: {available_cols}")
-
+    
     all_output_rows = []
     successful_segments = 0
 
@@ -498,8 +498,8 @@ def main():
             )
             if fb_df is None or fb_df.empty:
                 print("  No baseline could be produced (insufficient history before cutoffs). Skipping segment.")
-                continue
-
+            continue
+        
         # Assemble rows in old schema (lowercase + week_number)
         segment_rows = assemble_output_rows(
             df_group=df_group,
@@ -533,7 +533,7 @@ def main():
         # Old filename pattern
         timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = f"enhanced_attendance_forecast_all_combinations_2024_2025_{timestamp}.csv"
-
+        
         # Core old columns in order
         core_cols = [
             "week_number", "work_location", "shift_time", "department_group",
@@ -555,7 +555,7 @@ def main():
         print(f"  Segments processed successfully: {successful_segments}")
     else:
         print("\n✗ No forecasts generated - no segments had sufficient usable data")
-
+    
     print("\n=== DONE ===")
 
 if __name__ == "__main__":
