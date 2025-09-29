@@ -34,7 +34,7 @@ def week_to_thursday_date(week_str: str) -> pd.Timestamp:
     thursday = date.fromisocalendar(year, week, 4)
     return pd.Timestamp(thursday)
 
-def prepare_data_for_greykite(df_group, actual_col='ATTENDANCE_RATE_WITH_OUTLIER'):
+def prepare_data_for_greykite(df_group, actual_col='WEEKLY_ATTENDANCE_RATE'):
     """
     Prepare data for Greykite with Thursday week alignment and proper formatting.
     """
@@ -52,7 +52,7 @@ def prepare_data_for_greykite(df_group, actual_col='ATTENDANCE_RATE_WITH_OUTLIER
     
     return greykite_df, df
 
-def run_enhanced_greykite_forecast(df_group, actual_col='ATTENDANCE_RATE_WITH_OUTLIER', 
+def run_enhanced_greykite_forecast(df_group, actual_col='WEEKLY_ATTENDANCE_RATE', 
                                  forecast_horizon=5, coverage=0.95, plot=False,
                                  target_year='2025'):
     """
@@ -269,7 +269,7 @@ def run_enhanced_greykite_forecast(df_group, actual_col='ATTENDANCE_RATE_WITH_OU
         print(f"  ✗ Error in Greykite forecasting: {str(e)}")
         return None
 
-def compare_with_simple_baselines(df_group, target_year='2025', actual_col='ATTENDANCE_RATE_WITH_OUTLIER'):
+def compare_with_simple_baselines(df_group, target_year='2025', actual_col='WEEKLY_ATTENDANCE_RATE'):
     """
     Compare Greykite results with simple baseline methods.
     """
@@ -340,6 +340,23 @@ def main():
         print(f"✗ Error: Could not find {input_file}")
         return
     
+    # Identify actuals column (prefer new name with legacy fallbacks)
+    preferred_actual_cols = [
+        'WEEKLY_ATTENDANCE_RATE',
+        'Weekly_attendance_rate',
+        'ATTENDANCE_RATE_WITH_OUTLIER'
+    ]
+    actual_col = None
+    for col in preferred_actual_cols:
+        if col in df.columns:
+            actual_col = col
+            break
+    if actual_col is None:
+        print("✗ Error: Could not find an attendance rate column. Expected one of:", preferred_actual_cols)
+        return
+
+    print(f"Using actuals column: '{actual_col}'")
+
     # Identify all unique combinations
     grouping_cols = ['WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP']
     available_cols = [col for col in grouping_cols if col in df.columns]
@@ -390,7 +407,7 @@ def main():
             print(f"    Processing {target_year} forecasts...")
             results = run_enhanced_greykite_forecast(
                 df_group=filtered_df,
-                actual_col='ATTENDANCE_RATE_WITH_OUTLIER',
+                actual_col=actual_col,
                 forecast_horizon=1,  # 1-week horizon for weekly planning
                 coverage=0.95,  # 95% prediction intervals
                 target_year=target_year
@@ -413,7 +430,7 @@ def main():
         all_baselines = {}
         for target_year in target_years:
             if target_year in all_results:
-                baselines = compare_with_simple_baselines(filtered_df, target_year=target_year)
+                baselines = compare_with_simple_baselines(filtered_df, target_year=target_year, actual_col=actual_col)
                 if baselines:
                     all_baselines[target_year] = baselines
         
@@ -440,7 +457,7 @@ def main():
                         
                         # Add forecasting results
                         output_row.update({
-                            'actual_attendance': orig['ATTENDANCE_RATE_WITH_OUTLIER'],
+                            'actual_attendance': orig.get(actual_col, None),
                             'greykite_forecast': row['forecast']
                         })
                         
