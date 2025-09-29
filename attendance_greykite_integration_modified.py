@@ -1,56 +1,327 @@
-# --- after your imports and helper defs, keep all the improved logic as we set up before ---
-# (Greykite config with T+2, gap=1, AR lags, post-holiday, winsorization, date hardening, baseline fallback, etc.)
-# Only the lines below change the *extraction* and *export* to match the old CSV schema.
+#!/usr/bin/env python3
+"""
+Enhanced Attendance Forecasting Script using Greykite
+- Keeps the OLD CSV SCHEMA in the output:
+  week_number, work_location, shift_time, department_group,
+  actual_attendance, greykite_forecast, [greykite_forecast_lower_95, greykite_forecast_upper_95],
+  plus baseline columns (lowercase) from input if present, and four_week_rolling_avg_shift2.
+- Retains new logic:
+  * T+2 horizon with 1-week blackout (gap=1)
+  * Leakage-safe baseline MA(4) shifted by 2
+  * AR lags [1,2,3,4,52] + post-holiday effects + winsorization
+  * Robust date handling from WEEK_NUMBER/WEEK_BEGIN
+  * Greykite fallback baseline (leakage-safe) when GK can't run
+- Uses Thursday week start alignment (W-THU) to match historical convention
+"""
 
-def extract_greykite_point(result, step_index):
-    """Pull point + interval for the desired step from Greykite forecast df."""
-    fdf = result.forecast.df
-    if len(fdf) <= step_index:
-        return None, None, None
-    fc = fdf.iloc[step_index]
-    yhat = fc.get("forecast", np.nan)
-    lo = fc.get("forecast_lower", np.nan) if "forecast_lower" in fdf.columns else np.nan
-    hi = fc.get("forecast_upper", np.nan) if "forecast_upper" in fdf.columns else np.nan
-    return yhat, lo, hi
+import pandas as pd
+import numpy as np
+import datetime as dt
+import warnings
+from sklearn.metrics import mean_absolute_error
 
-def assemble_output_rows(
-    df_group,                       # original group df (has WEEK_NUMBER, actuals, any baseline cols)
-    group_id,                       # dict with {'WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP'}
-    gk_rows_df=None,                # dataframe from run_greykite_realistic_forecast (per-target rows)
-    gk_intervals=None,              # dict: {week_begin -> (yhat, lo, hi)} when available
-    fallback_rows_df=None,          # dataframe from baseline_realistic_forecast (when GK missing)
-    attendance_col="WEEKLY_ATTENDANCE_RATE",
-    include_years=("2024","2025")   # to mirror the older file scope, filter to these years
-):
+# Greykite imports
+from greykite.framework.templates.forecaster import Forecaster
+from greykite.framework.templates.model_templates import ModelTemplateEnum
+from greykite.framework.templates.autogen.forecast_config import (
+    ForecastConfig, MetadataParam, ModelComponentsParam, EvaluationMetricParam, EvaluationPeriodParam
+)
+
+warnings.filterwarnings("ignore")
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', None)
+
+# ---------------------------
+# HelloFresh week helpers (unchanged signatures)
+# ---------------------------
+def datetime_to_hf_week(date_time: dt.datetime):
+    hf_datetime = date_time + dt.timedelta(days=2)
+    year, week, _ = hf_datetime.isocalendar()
+    return f"{year}-W{week:02d}"
+
+def hf_week_to_datetime(hf_week: str):
+    # ISO week Monday=1; we want HF Thursday anchor overall; we still compute base date then align via freq later
+    return dt.datetime.strptime(hf_week + "-1", "%G-W%V-%w") - dt.timedelta(days=2)
+
+def hf_week_add(hf_week: str, num_weeks: int):
+    return datetime_to_hf_week(hf_week_to_datetime(hf_week) + dt.timedelta(weeks=num_weeks))
+
+def hf_week_sub(hf_week: str, num_weeks: int):
+    return datetime_to_hf_week(hf_week_to_datetime(hf_week) - dt.timedelta(weeks=num_weeks))
+
+def current_hf_week():
+    return datetime_to_hf_week(dt.datetime.today())
+
+def week_to_thursday_date(week_str: str) -> pd.Timestamp:
+    """Convert 'YYYY-Www' to that ISO week's Thursday date (day=4)."""
+    year, week = map(int, week_str.split("-W"))
+    thursday = dt.date.fromisocalendar(year, week, 4)
+    return pd.Timestamp(thursday)
+
+# ---------------------------
+# Robust week/date utilities (internal only; output schema unaffected)
+# ---------------------------
+def safe_week_str(ts: pd.Timestamp, fmt: str = "%G-W%V"):
+    try:
+        return ts.strftime(fmt) if pd.notna(ts) else "NaT"
+    except Exception:
+        return "NaT"
+
+def coerce_week_begin(df: pd.DataFrame,
+                      week_col: str = "WEEK_BEGIN",
+                      weeknum_col: str = "WEEK_NUMBER") -> pd.DataFrame:
     """
-    Returns a list of dicts in the *old schema*:
+    Build/repair WEEK_BEGIN:
+      - Parse WEEK_BEGIN if present
+      - If NaT and WEEK_NUMBER exists, rebuild from HF week string (Thursday)
+    """
+    if week_col in df.columns:
+        df[week_col] = pd.to_datetime(df[week_col], errors="coerce")
+    else:
+        df[week_col] = pd.NaT
+
+    if weeknum_col in df.columns:
+        mask = df[week_col].isna() & df[weeknum_col].notna()
+        if mask.any():
+            df.loc[mask, week_col] = df.loc[mask, weeknum_col].apply(week_to_thursday_date)
+
+    return df
+
+# ---------------------------
+# Baseline calc (leakage-safe). We’ll export as 'four_week_rolling_avg_shift2'
+# ---------------------------
+def leakage_safe_ma4_shift2(series: pd.Series) -> pd.Series:
+    """MA(4) shifted by 2 for T+2 with 1-week blackout."""
+    return series.rolling(window=4, min_periods=1).mean().shift(2)
+
+# ---------------------------
+# Greykite realistic forecast (T+2 with gap=1)
+# Returns a DataFrame with rows per target week (WEEK_BEGIN, GREYKITE_FORECAST, intervals if available, etc.)
+# ---------------------------
+def run_greykite_realistic_forecast(
+    df_group: pd.DataFrame,
+    actual_col: str,
+    forecast_start_date: str = "2024-01-01",
+    gap_weeks: int = 1
+) -> pd.DataFrame:
+    """
+    Rolling-origin Greykite forecast:
+      - For each target week >= forecast_start_date
+      - Train cutoff = target - (gap+1) weeks (so with gap=1, cutoff = T-2)
+      - Forecast horizon = gap+1 (=2), take step at index 'gap_weeks' (1) => T+2
+    """
+    MIN_TRAIN_WEEKS = 52
+
+    # Robust prep
+    df_group = df_group.dropna(subset=["WEEK_BEGIN"]).sort_values("WEEK_BEGIN").reset_index(drop=True)
+    if len(df_group) < MIN_TRAIN_WEEKS:
+        print(f"    Skipping Greykite: insufficient total history ({len(df_group)} < {MIN_TRAIN_WEEKS})")
+        return pd.DataFrame()
+
+    forecast_start = pd.to_datetime(forecast_start_date)
+
+    # Winsorize target for robustness (1–99 pct)
+    lo, hi = df_group[actual_col].quantile([0.01, 0.99])
+    df_group[actual_col] = df_group[actual_col].clip(lo, hi)
+
+    # Leakage-safe regressors (shift=2)
+    df_group["ROLL_MEAN_4_S2"] = df_group[actual_col].rolling(4, min_periods=1).mean().shift(2)
+    df_group["ROLL_MEDIAN_4_S2"] = df_group[actual_col].rolling(4, min_periods=1).median().shift(2)
+
+    forecast_weeks = df_group[df_group["WEEK_BEGIN"] >= forecast_start].copy()
+    if len(forecast_weeks) == 0:
+        print(f"    No data found from {forecast_start_date} onwards")
+        return pd.DataFrame()
+
+    results_rows = []
+    forecaster = Forecaster()
+
+    for _, row in forecast_weeks.iterrows():
+        target_week = row["WEEK_BEGIN"]
+        actual_value = row[actual_col]
+
+        training_cutoff = target_week - pd.Timedelta(weeks=gap_weeks + 1)
+        train_data = df_group[df_group["WEEK_BEGIN"] <= training_cutoff].copy()
+        train_data = train_data.dropna(subset=["WEEK_BEGIN", actual_col])
+
+        if len(train_data) < MIN_TRAIN_WEEKS:
+            print(f"    Skip target {safe_week_str(target_week)}: train weeks {len(train_data)} < {MIN_TRAIN_WEEKS}")
+            continue
+
+        print(
+            f"    Greykite for {safe_week_str(target_week)} using {len(train_data)} weeks up to "
+            f"{safe_week_str(train_data['WEEK_BEGIN'].max())} (gap={gap_weeks})"
+        )
+
+        metadata = MetadataParam(
+            time_col="WEEK_BEGIN",
+            value_col=actual_col,
+            freq="W-THU"  # keep Thursday anchor (old convention)
+        )
+
+        model_components = ModelComponentsParam(
+            seasonality={
+                "yearly_seasonality": {
+                    "seas_names": ["yearly"],
+                    "fourier_series": {"yearly": {"period": 52.18, "order": 4}}
+                }
+                # weekly_seasonality intentionally removed (not identifiable with one obs/week)
+            },
+            autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
+            events={
+                "holiday_lookup_countries": ["US"],
+                "holiday_pre_num_days": 8,
+                "holiday_post_num_days": 3
+            },
+            regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
+        )
+
+        evaluation = EvaluationPeriodParam(
+            test_horizon=2,                         # exactly T+2
+            periods_between_train_test=1,           # 1-week blackout
+            cv_horizon=2,
+            cv_min_train_periods=MIN_TRAIN_WEEKS,
+            cv_expanding_window=True,
+            cv_use_most_recent_splits=True,
+            cv_periods_between_splits=1,
+            cv_periods_between_train_test=1,
+            cv_max_splits=3
+        )
+
+        try:
+            result = forecaster.run_forecast_config(
+                df=train_data,
+                config=ForecastConfig(
+                    model_template=ModelTemplateEnum.AUTO.name,
+                    forecast_horizon=gap_weeks + 1,  # =2; take step index 1
+                    coverage=0.95,  # intervals if available
+                    metadata_param=metadata,
+                    model_components_param=model_components,
+                    evaluation_metric_param=EvaluationMetricParam(
+                        cv_selection_metric="MeanAbsoluteError"
+                    ),
+                    evaluation_period_param=evaluation
+                )
+            )
+
+            # Pull the step at index 'gap_weeks' (1) from the forecast
+            fdf = result.forecast.df
+            if len(fdf) > gap_weeks:
+                rowf = fdf.iloc[gap_weeks]
+                forecast_value = rowf.get("forecast", np.nan)
+                lower_value = rowf.get("forecast_lower", np.nan) if "forecast_lower" in fdf.columns else np.nan
+                upper_value = rowf.get("forecast_upper", np.nan) if "forecast_upper" in fdf.columns else np.nan
+
+                results_rows.append({
+                    "WEEK_BEGIN": target_week,
+                    "ACTUAL_ATTENDANCE_RATE": actual_value,
+                    "GREYKITE_FORECAST": forecast_value,
+                    "GREYKITE_FORECAST_LOWER_95": lower_value,
+                    "GREYKITE_FORECAST_UPPER_95": upper_value,
+                    "TRAINING_WEEKS_USED": len(train_data),
+                    "TRAINING_END_DATE": train_data["WEEK_BEGIN"].max(),
+                    "GAP_WEEKS": gap_weeks
+                })
+
+        except Exception as e:
+            print(f"      Greykite error at {safe_week_str(target_week)}: {e}")
+            continue
+
+    return pd.DataFrame(results_rows)
+
+# ---------------------------
+# Baseline realistic forecast (fallback); uses leakage-safe MA(4) shift=2
+# ---------------------------
+def baseline_realistic_forecast(
+    df_group: pd.DataFrame,
+    actual_col: str,
+    forecast_start_date: str = "2024-01-01",
+    gap_weeks: int = 1,
+    window: int = 4
+) -> pd.DataFrame:
+    """
+    Leakage-safe baseline to mirror realistic setup:
+      - For target_week, training cutoff = target - (gap+1) weeks
+      - Baseline MA(4) shifted by 2 already respects cutoff (no leakage)
+    """
+    df_group = df_group.sort_values("WEEK_BEGIN").reset_index(drop=True)
+    forecast_start = pd.to_datetime(forecast_start_date)
+
+    df_group["__BASELINE_MA4_S2"] = df_group[actual_col].rolling(window, min_periods=1).mean().shift(gap_weeks + 1)
+
+    target_rows = df_group[df_group["WEEK_BEGIN"] >= forecast_start].copy()
+    if target_rows.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, r in target_rows.iterrows():
+        target_week = r["WEEK_BEGIN"]
+        cutoff = target_week - pd.Timedelta(weeks=gap_weeks + 1)
+        train_slice = df_group[df_group["WEEK_BEGIN"] <= cutoff]
+        if train_slice.empty:
+            continue
+
+        rows.append({
+            "WEEK_BEGIN": target_week,
+            "ACTUAL_ATTENDANCE_RATE": r[actual_col],
+            "GREYKITE_FORECAST": np.nan,  # fallback has no GK
+            "GREYKITE_FORECAST_LOWER_95": np.nan,
+            "GREYKITE_FORECAST_UPPER_95": np.nan,
+            "BASELINE_MA4_S2": r["__BASELINE_MA4_S2"],
+            "TRAINING_WEEKS_USED": len(train_slice),
+            "TRAINING_END_DATE": train_slice["WEEK_BEGIN"].max(),
+            "GAP_WEEKS": gap_weeks
+        })
+
+    return pd.DataFrame(rows)
+
+# ---------------------------
+# Assemble rows in the OLD CSV SCHEMA (lowercase; week_number as key)
+# ---------------------------
+def assemble_output_rows(
+    df_group: pd.DataFrame,                   # original group df (has WEEK_NUMBER, actuals, and possibly baseline cols)
+    group_id: dict,                           # {'WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP'}
+    gk_df: pd.DataFrame = None,               # Greykite per-target rows (can be empty)
+    fb_df: pd.DataFrame = None,               # fallback per-target rows (can be empty)
+    attendance_col: str = "WEEKLY_ATTENDANCE_RATE",
+    include_years=("2024", "2025")
+) -> list:
+    """
+    Emits rows in the old schema:
       week_number, work_location, shift_time, department_group,
-      actual_attendance, greykite_forecast, greykite_forecast_lower_95, greykite_forecast_upper_95,
-      plus baseline columns if present in the input (lowercase names).
-      Also adds our leakage-safe MA(4) as 'four_week_rolling_avg_shift2' for clarity.
+      actual_attendance, greykite_forecast, [greykite_forecast_lower_95, greykite_forecast_upper_95],
+      + baseline columns (lowercase) from input if present,
+      + four_week_rolling_avg_shift2 (our leakage-safe MA4 baseline).
     """
     out = []
 
-    # Prepare convenience lookups
-    df_group = df_group.copy()
-    # old schema uses WEEK_NUMBER string; keep it
+    # Ensure WEEK_NUMBER exists (use existing or reconstruct)
     if "WEEK_NUMBER" not in df_group.columns:
-        # if missing, reconstruct from WEEK_BEGIN (internal) if available
         if "WEEK_BEGIN" in df_group.columns:
-            df_group["WEEK_NUMBER"] = df_group["WEEK_BEGIN"].apply(
-                lambda d: d.strftime("%G-W%V") if pd.notna(d) else None
-            )
+            df_group["WEEK_NUMBER"] = df_group["WEEK_BEGIN"].apply(lambda d: d.strftime("%G-W%V") if pd.notna(d) else None)
         else:
             df_group["WEEK_NUMBER"] = None
 
-    # lowercase grouping values
+    # lowercase grouping identifiers
     gl = {
         "work_location": group_id.get("WORK_LOCATION", None),
         "shift_time": group_id.get("SHIFT_TIME", None),
         "department_group": group_id.get("DEPARTMENT_GROUP", None)
     }
 
-    # candidate baseline columns from input (old names)
+    # Map WEEK_BEGIN -> WEEK_NUMBER
+    wb_to_wn = {}
+    if "WEEK_BEGIN" in df_group.columns:
+        tmp = df_group[["WEEK_BEGIN", "WEEK_NUMBER"]].dropna().drop_duplicates()
+        wb_to_wn = dict(zip(tmp["WEEK_BEGIN"], tmp["WEEK_NUMBER"]))
+
+    # Add our leakage-safe baseline as lowercase name for output
+    if "MOVING_AVG_4WEEK_FORECAST" in df_group.columns:
+        df_group["four_week_rolling_avg_shift2"] = df_group["MOVING_AVG_4WEEK_FORECAST"]
+    elif "BASELINE_MA4_S2" in df_group.columns:
+        df_group["four_week_rolling_avg_shift2"] = df_group["BASELINE_MA4_S2"]
+
+    # Candidate baseline columns from input (old names)
     other_forecast_columns = [
         "FOUR_WEEK_ROLLING_AVG",
         "SIX_WEEK_ROLLING_AVG",
@@ -60,153 +331,233 @@ def assemble_output_rows(
         "EXPONENTIAL_SMOOTHING_0_8",
         "EXPONENTIAL_SMOOTHING_1"
     ]
-    # leakage-safe MA(4) we built as MOVING_AVG_4WEEK_FORECAST (shift=2)
-    if "MOVING_AVG_4WEEK_FORECAST" in df_group.columns:
-        df_group["four_week_rolling_avg_shift2"] = df_group["MOVING_AVG_4WEEK_FORECAST"]
 
-    # restrict to target years like the old script
-    df_years = df_group[df_group["WEEK_NUMBER"].astype(str).str[:4].isin(include_years)]
+    df_group_years = df_group[df_group["WEEK_NUMBER"].astype(str).str[:4].isin(include_years)]
 
-    # helper to create a row in old schema
-    def make_row(wn, actual, gk, lo, hi, src_row):
-        row = {
-            "week_number": wn,
-            "work_location": gl["work_location"],
-            "shift_time": gl["shift_time"],
-            "department_group": gl["department_group"],
-            "actual_attendance": actual,
-            "greykite_forecast": gk
-        }
-        # optional intervals
-        if not pd.isna(lo):
-            row["greykite_forecast_lower_95"] = lo
-            row["greykite_forecast_upper_95"] = hi
-
-        # attach any known baseline columns from *input* (converted to readable lowercase)
+    def attach_baselines(row_dict, src_row: pd.Series):
         for col in other_forecast_columns:
             if col in src_row.index:
                 if col.startswith("EXPONENTIAL_SMOOTHING_"):
-                    # map e.g. EXPONENTIAL_SMOOTHING_0_4 -> exponential_smoothing_alpha_0.4
                     alpha = col.split("_")[-1].replace("_", ".")
                     key = f"exponential_smoothing_alpha_{alpha}"
                 else:
                     key = col.lower()
-                row[key] = src_row[col]
-
-        # attach our leakage-safe baseline if present
+                row_dict[key] = src_row[col]
         if "four_week_rolling_avg_shift2" in src_row.index:
-            row["four_week_rolling_avg_shift2"] = src_row["four_week_rolling_avg_shift2"]
+            row_dict["four_week_rolling_avg_shift2"] = src_row["four_week_rolling_avg_shift2"]
 
-        return row
-
-    # Build a map week_begin -> WEEK_NUMBER for linking GK/fallback rows back to week_number
-    wb_to_wn = {}
-    if "WEEK_BEGIN" in df_group.columns:
-        tmp = df_group[["WEEK_BEGIN", "WEEK_NUMBER"]].dropna().drop_duplicates()
-        wb_to_wn = dict(zip(tmp["WEEK_BEGIN"], tmp["WEEK_NUMBER"]))
-
-    # 1) Greykite rows first (preferred when present)
-    if gk_rows_df is not None and not gk_rows_df.empty:
-        for _, r in gk_rows_df.iterrows():
+    # 1) Greykite rows
+    if gk_df is not None and not gk_df.empty:
+        for _, r in gk_df.iterrows():
             wb = r["WEEK_BEGIN"]
-            wn = wb_to_wn.get(wb, None)
-            if wn is None:
-                # fallback: derive week number string from WEEK_BEGIN
-                wn = wb.strftime("%G-W%V") if pd.notna(wb) else None
-            # filter to target years like old file
+            wn = wb_to_wn.get(wb, (wb.strftime("%G-W%V") if pd.notna(wb) else None))
             if not (isinstance(wn, str) and wn[:4] in include_years):
                 continue
 
-            # locate the source row to harvest actuals & baselines
-            src = df_years[df_years["WEEK_NUMBER"] == wn]
+            src = df_group_years[df_group_years["WEEK_NUMBER"] == wn]
             src_row = src.iloc[0] if not src.empty else pd.Series(dtype=object)
-
             actual = src_row.get(attendance_col, np.nan) if not src.empty else np.nan
 
-            # pick up forecast + intervals
-            if gk_intervals and wb in gk_intervals:
-                gk, lo, hi = gk_intervals[wb]
-            else:
-                # if intervals not captured earlier, at least set point
-                gk = r.get("GREYKITE_FORECAST", np.nan)
-                lo = np.nan
-                hi = np.nan
+            row = {
+                "week_number": wn,
+                "work_location": gl["work_location"],
+                "shift_time": gl["shift_time"],
+                "department_group": gl["department_group"],
+                "actual_attendance": actual,
+                "greykite_forecast": r.get("GREYKITE_FORECAST", np.nan)
+            }
 
-            out.append(make_row(wn, actual, gk, lo, hi, src_row))
+            # intervals if available
+            lo = r.get("GREYKITE_FORECAST_LOWER_95", np.nan)
+            hi = r.get("GREYKITE_FORECAST_UPPER_95", np.nan)
+            if not pd.isna(lo) and not pd.isna(hi):
+                row["greykite_forecast_lower_95"] = lo
+                row["greykite_forecast_upper_95"] = hi
 
-    # 2) Fallback rows for weeks not covered by GK
-    if fallback_rows_df is not None and not fallback_rows_df.empty:
-        for _, r in fallback_rows_df.iterrows():
+            attach_baselines(row, src_row)
+            out.append(row)
+
+    # 2) Fallback rows (no Greykite point)
+    if fb_df is not None and not fb_df.empty:
+        for _, r in fb_df.iterrows():
             wb = r["WEEK_BEGIN"]
-            wn = wb_to_wn.get(wb, None)
-            if wn is None:
-                wn = wb.strftime("%G-W%V") if pd.notna(wb) else None
+            wn = wb_to_wn.get(wb, (wb.strftime("%G-W%V") if pd.notna(wb) else None))
             if not (isinstance(wn, str) and wn[:4] in include_years):
                 continue
 
-            src = df_years[df_years["WEEK_NUMBER"] == wn]
+            src = df_group_years[df_group_years["WEEK_NUMBER"] == wn]
             src_row = src.iloc[0] if not src.empty else pd.Series(dtype=object)
             actual = src_row.get(attendance_col, np.nan) if not src.empty else np.nan
 
-            # baseline fallback has no GK, so greykite_forecast stays NaN
-            out.append(make_row(wn, actual, np.nan, np.nan, np.nan, src_row))
+            row = {
+                "week_number": wn,
+                "work_location": gl["work_location"],
+                "shift_time": gl["shift_time"],
+                "department_group": gl["department_group"],
+                "actual_attendance": actual,
+                "greykite_forecast": np.nan  # fallback provides no GK point
+            }
+            attach_baselines(row, src_row)
+            out.append(row)
 
     return out
 
-# ---- In your main() loop, after you run Greykite / fallback per segment, replace the export block with: ----
+# ---------------------------
+# Main
+# ---------------------------
+def main():
+    print("=== ENHANCED ATTENDANCE FORECASTING WITH GREYKITE (OLD CSV SCHEMA) ===")
 
-# inside the per-group loop, collect rows in old schema
-segment_rows = []
+    # Load data
+    input_file = "/Users/nikhil.ranka/attendance-analytics-dashboard/Labor_Management-Greykite_Input.csv"
+    try:
+        df = pd.read_csv(input_file)
+        print(f"\n✓ Loaded data: {len(df)} records from {input_file}")
+        print(f"Available columns: {list(df.columns)}")
+    except FileNotFoundError:
+        print(f"✗ Error: Could not find {input_file}")
+        return
 
-# After Greykite run:
-# We also capture intervals per target week_begin
-gk_intervals_map = {}
-if greykite_results is not None and not greykite_results.empty:
-    # If you have access to the 'result' object per target, you can stash (yhat, lo, hi) there.
-    # In our rolling realistic loop we only kept point yhat. Quick way:
-    # recompute intervals from the stored forecast_df if you still have the `result`.
-    # If not, leave intervals as NaN (schema still matches).
-    pass
-
-segment_rows.extend(
-    assemble_output_rows(
-        df_group=df_group,
-        group_id={"WORK_LOCATION": work_location, "SHIFT_TIME": shift_time, "DEPARTMENT_GROUP": department_group},
-        gk_rows_df=greykite_results,              # dataframe of GK targets (has WEEK_BEGIN, GREYKITE_FORECAST, etc.)
-        gk_intervals=gk_intervals_map,            # if you recorded intervals; else leave {}
-        fallback_rows_df=fb if ('fb' in locals() and fb is not None) else None,
-        attendance_col=attendance_col,
-        include_years=("2024","2025")             # mirror older file scope
-    )
-)
-
-all_output_data.extend(segment_rows)
-
-# ---- After processing all groups, export EXACTLY like the old script: ----
-
-if all_output_data:
-    output_df = pd.DataFrame(all_output_data)
-
-    # filename pattern identical to the old file
-    timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = f"enhanced_attendance_forecast_all_combinations_2024_2025_{timestamp}.csv"
-
-    # enforce column order where possible (old schema core)
-    core_cols = [
-        "week_number", "work_location", "shift_time", "department_group",
-        "actual_attendance", "greykite_forecast"
+    # Identify actuals column
+    preferred_actual_cols = [
+        "WEEKLY_ATTENDANCE_RATE",
+        "Weekly_attendance_rate",
+        "ATTENDANCE_RATE_WITH_OUTLIER"
     ]
-    # optional intervals
-    if {"greykite_forecast_lower_95", "greykite_forecast_upper_95"}.issubset(output_df.columns):
-        core_cols += ["greykite_forecast_lower_95", "greykite_forecast_upper_95"]
+    attendance_col = None
+    for col in preferred_actual_cols:
+        if col in df.columns:
+            attendance_col = col
+            break
+    if attendance_col is None:
+        print("✗ Error: Could not find an attendance rate column. Expected one of:", preferred_actual_cols)
+        return
+    print(f"Using actuals column: '{attendance_col}'")
 
-    # keep any other baseline columns that happen to be present (already lowercase in assemble_output_rows)
-    other_cols = [c for c in output_df.columns if c not in core_cols]
-    output_df = output_df[core_cols + other_cols]
+    # Build/repair WEEK_BEGIN internally (not exported)
+    if "WEEK_NUMBER" not in df.columns and "WEEK_BEGIN" not in df.columns:
+        print("✗ Error: Neither WEEK_BEGIN nor WEEK_NUMBER column found in data")
+        return
+    df = coerce_week_begin(df, week_col="WEEK_BEGIN", weeknum_col="WEEK_NUMBER")
+    bad_rows = df["WEEK_BEGIN"].isna().sum()
+    if bad_rows > 0:
+        print(f"Dropping {bad_rows} rows with unusable WEEK_BEGIN (NaT) after coercion")
+        df = df.dropna(subset=["WEEK_BEGIN"])
 
-    output_df.to_csv(output_file, index=False)
-    print(f"\n✓ Enhanced forecasts saved to: {output_file}")
-    print(f"  Records: {len(output_df)}")
-    print(f"  Columns: {list(output_df.columns)}")
-else:
-    print("\n✗ No forecasts generated - no combinations had sufficient data")
+    # Light hygiene: cap ridiculous values; de-dup
+    df = df[df[attendance_col] < 130]
+    key_columns = ["WEEK_NUMBER", "WORK_LOCATION", "SHIFT_TIME"]
+    if "DEPARTMENT_GROUP" in df.columns:
+        key_columns.append("DEPARTMENT_GROUP")
+    available_key_columns = [c for c in key_columns if c in df.columns]
+    df = df.drop_duplicates(subset=available_key_columns, keep="last")
+    df = df.sort_values(["WEEK_BEGIN"]).reset_index(drop=True)
+
+    # Grouping columns
+    grouping_cols = ["WORK_LOCATION", "SHIFT_TIME", "DEPARTMENT_GROUP"]
+    available_cols = [c for c in grouping_cols if c in df.columns]
+    if not available_cols:
+        print("✗ Error: Required grouping columns not found in data")
+        return
+    print(f"\nGrouping by: {available_cols}")
+
+    all_output_rows = []
+    successful_segments = 0
+
+    for group_values, df_group in df.groupby(available_cols):
+        group_id = dict(zip(available_cols, group_values))
+        # Ensure all keys exist for downstream assembly
+        for k in ["WORK_LOCATION", "SHIFT_TIME", "DEPARTMENT_GROUP"]:
+            group_id.setdefault(k, None)
+
+        print(f"\nProcessing: {group_id['WORK_LOCATION']} - {group_id['SHIFT_TIME']} - {group_id['DEPARTMENT_GROUP']}")
+        print(f"Data points: {len(df_group)}")
+
+        df_group = df_group.reset_index(drop=True)
+
+        # Leakage-safe baseline column for downstream export and eval (lowercase in final)
+        df_group["MOVING_AVG_4WEEK_FORECAST"] = leakage_safe_ma4_shift2(df_group[attendance_col])
+
+        # Try Greykite per-target T+2
+        gk_df = run_greykite_realistic_forecast(
+            df_group=df_group,
+            actual_col=attendance_col,
+            forecast_start_date="2024-01-01",
+            gap_weeks=1
+        )
+
+        # Fallback if Greykite unavailable/empty
+        fb_df = pd.DataFrame()
+        if gk_df is None or gk_df.empty:
+            print("  Using baseline fallback for this segment.")
+            fb_df = baseline_realistic_forecast(
+                df_group=df_group,
+                actual_col=attendance_col,
+                forecast_start_date="2024-01-01",
+                gap_weeks=1,
+                window=4
+            )
+            if fb_df is None or fb_df.empty:
+                print("  No baseline could be produced (insufficient history before cutoffs). Skipping segment.")
+                continue
+
+        # Assemble rows in old schema (lowercase + week_number)
+        segment_rows = assemble_output_rows(
+            df_group=df_group,
+            group_id=group_id,
+            gk_df=gk_df,
+            fb_df=fb_df,
+            attendance_col=attendance_col,
+            include_years=("2024", "2025")  # mirror old file scope
+        )
+        if segment_rows:
+            all_output_rows.extend(segment_rows)
+            successful_segments += 1
+
+        # Quick on-the-fly MAE check (only where both GK point and actual exist)
+        if gk_df is not None and not gk_df.empty:
+            # link to actuals & baseline
+            tmp = gk_df.merge(
+                df_group[["WEEK_BEGIN", attendance_col, "MOVING_AVG_4WEEK_FORECAST"]],
+                on="WEEK_BEGIN", how="left"
+            ).rename(columns={attendance_col: "ACTUAL"})
+            valid = tmp.dropna(subset=["ACTUAL", "GREYKITE_FORECAST", "MOVING_AVG_4WEEK_FORECAST"])
+            if len(valid) > 0:
+                mae_gk = mean_absolute_error(valid["ACTUAL"], valid["GREYKITE_FORECAST"])
+                mae_ma = mean_absolute_error(valid["ACTUAL"], valid["MOVING_AVG_4WEEK_FORECAST"])
+                print(f"  Greykite MAE: {mae_gk:.4f} | Shifted MA(4) MAE: {mae_ma:.4f}")
+
+    # Export EXACTLY like the old script
+    if all_output_rows:
+        output_df = pd.DataFrame(all_output_rows)
+
+        # Old filename pattern
+        timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = f"enhanced_attendance_forecast_all_combinations_2024_2025_{timestamp}.csv"
+
+        # Core old columns in order
+        core_cols = [
+            "week_number", "work_location", "shift_time", "department_group",
+            "actual_attendance", "greykite_forecast"
+        ]
+        # Optional intervals
+        if {"greykite_forecast_lower_95", "greykite_forecast_upper_95"}.issubset(set(output_df.columns)):
+            core_cols += ["greykite_forecast_lower_95", "greykite_forecast_upper_95"]
+
+        # Keep any other baseline columns (already lowercase)
+        other_cols = [c for c in output_df.columns if c not in core_cols]
+        output_df = output_df[core_cols + other_cols]
+
+        # Save
+        output_df.to_csv(output_file, index=False)
+        print(f"\n✓ Enhanced forecasts saved to: {output_file}")
+        print(f"  Records: {len(output_df)}")
+        print(f"  Columns: {list(output_df.columns)}")
+        print(f"  Segments processed successfully: {successful_segments}")
+    else:
+        print("\n✗ No forecasts generated - no segments had sufficient usable data")
+
+    print("\n=== DONE ===")
+
+if __name__ == "__main__":
+    main()
