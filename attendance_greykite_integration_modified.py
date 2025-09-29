@@ -161,22 +161,22 @@ def run_greykite_realistic_forecast(
 
         model_components = ModelComponentsParam(
     seasonality={
-        "yearly_seasonality": 4,     # Fourier order (int)
-        "weekly_seasonality": False, # explicit off for weekly data
+        "yearly_seasonality": 4,     # int Fourier order
+        "weekly_seasonality": False,
         "monthly_seasonality": False,
         "daily_seasonality": False,
         "quarterly_seasonality": False,
     },
-    # >>> Correct autoregression schema for your Greykite version
     autoregression={
         "autoreg_dict": {
             "lag_dict": {
-                # AR lags you wanted
-                "orders": [1, 2, 3, 4, 52],
-                # optional: "aggregation_type": "mean",
-                # optional: "intervals": [1],  # default is fine for weekly
+                "orders": [1, 2, 3, 4, 52],   # <-- AR lags here
+                # Optional fields (use defaults if unsure):
+                # "aggregation_type": "mean",
+                # "intervals": [1],
             }
-            # optional: "series_na_fill_func": None / "zero" / "ffill"
+            # Optional NA policy:
+            # , "series_na_fill_func": "zero"  # or "ffill"
         }
     },
     events={
@@ -186,6 +186,7 @@ def run_greykite_realistic_forecast(
     },
     regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
 )
+
 
 
 
