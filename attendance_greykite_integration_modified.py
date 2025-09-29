@@ -201,13 +201,16 @@ def run_greykite_realistic_forecast(
         train_data = df_group[df_group['WEEK_BEGIN'] <= training_cutoff].copy()
 
         if len(train_data) < MIN_TRAIN_WEEKS:
-            print(f"    Skip target {target_week.strftime('%Y-W%U')}: train weeks {len(train_data)} < {MIN_TRAIN_WEEKS}")
+            print(f"    Skip target {safe_week_str(target_week)}: train weeks {len(train_data)} < {MIN_TRAIN_WEEKS}")
             continue
 
         print(
             f"    Forecasting {safe_week_str(target_week)} using {len(train_data)} weeks up to "
             f"{safe_week_str(train_data['WEEK_BEGIN'].max())} (gap={gap_weeks})"
         )
+
+        # Drop any residual NaT rows in training slice
+        train_data = train_data.dropna(subset=['WEEK_BEGIN', actual_col]).copy()
 
         metadata = MetadataParam(
             time_col="WEEK_BEGIN",
