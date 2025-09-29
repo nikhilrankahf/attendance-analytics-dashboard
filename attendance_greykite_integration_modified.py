@@ -160,20 +160,22 @@ def run_greykite_realistic_forecast(
         )
 
         model_components = ModelComponentsParam(
-            seasonality={
-                # yearly seasonality with Fourier order 4
-                "yearly_seasonality": 4,
-                # disable weekly at weekly sampling (not identifiable)
-                "weekly_seasonality": None
-            },
-            autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
-            events={
-                "holiday_lookup_countries": ["US"],
-                "holiday_pre_num_days": 8,
-                "holiday_post_num_days": 3
-            },
-            regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
-        )
+    seasonality={
+        "yearly_seasonality": 4,     # Fourier order (int)
+        "quarterly_seasonality": False,
+        "monthly_seasonality": False,
+        "weekly_seasonality": False, # use False, not None
+        "daily_seasonality": False
+    },
+    autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
+    events={
+        "holiday_lookup_countries": ["US"],
+        "holiday_pre_num_days": 8,
+        "holiday_post_num_days": 3
+    },
+    regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
+)
+
 
         evaluation = EvaluationPeriodParam(
             test_horizon=2,                         # exactly T+2
@@ -191,7 +193,7 @@ def run_greykite_realistic_forecast(
             result = forecaster.run_forecast_config(
                 df=train_data,
                 config=ForecastConfig(
-                    model_template=ModelTemplateEnum.SILVERKITE.name,
+                    model_template=ModelTemplateEnum.AUTO.name,
                     forecast_horizon=gap_weeks + 1,  # =2; take step index 1
                     coverage=0.95,  # intervals if available
                     metadata_param=metadata,
@@ -220,12 +222,12 @@ def run_greykite_realistic_forecast(
                     "TRAINING_WEEKS_USED": len(train_data),
                     "TRAINING_END_DATE": train_data["WEEK_BEGIN"].max(),
                     "GAP_WEEKS": gap_weeks
-                })
-
-        except Exception as e:
+                    })
+                    
+                except Exception as e:
             print(f"      Greykite error at {safe_week_str(target_week)}: {e}")
-            continue
-
+                    continue
+                
     return pd.DataFrame(results_rows)
 
 # ---------------------------
