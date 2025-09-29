@@ -161,31 +161,21 @@ def run_greykite_realistic_forecast(
 
         model_components = ModelComponentsParam(
     seasonality={
-        "yearly_seasonality": 4,     # int Fourier order
-        "weekly_seasonality": False,
+        "yearly_seasonality": 4,     # Fourier order (int)
+        "weekly_seasonality": False, # explicitly off at weekly sampling
         "monthly_seasonality": False,
         "daily_seasonality": False,
         "quarterly_seasonality": False,
     },
-    autoregression={
-        "autoreg_dict": {
-            "lag_dict": {
-                "orders": [1, 2, 3, 4, 52],   # <-- AR lags here
-                # Optional fields (use defaults if unsure):
-                # "aggregation_type": "mean",
-                # "intervals": [1],
-            }
-            # Optional NA policy:
-            # , "series_na_fill_func": "zero"  # or "ffill"
-        }
-    },
+    autoregression=None,             # <- remove AR to avoid API/version issues
     events={
         "holiday_lookup_countries": ["US"],
         "holiday_pre_num_days": 8,
         "holiday_post_num_days": 3
-    },
-    regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
+    }
+    # <- remove regressors entirely to avoid fut_df future-frame errors
 )
+
 
 
 
