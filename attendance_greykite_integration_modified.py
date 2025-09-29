@@ -191,7 +191,7 @@ def run_greykite_realistic_forecast(
             result = forecaster.run_forecast_config(
                 df=train_data,
                 config=ForecastConfig(
-                    model_template=ModelTemplateEnum.AUTO.name,
+                    model_template=ModelTemplateEnum.SILVERKITE.name,
                     forecast_horizon=gap_weeks + 1,  # =2; take step index 1
                     coverage=0.95,  # intervals if available
                     metadata_param=metadata,
