@@ -160,21 +160,33 @@ def run_greykite_realistic_forecast(
         )
 
         model_components = ModelComponentsParam(
-            seasonality={
-                "yearly_seasonality": 4,
-                "quarterly_seasonality": False,
-                "monthly_seasonality": False,
-                "weekly_seasonality": False,
-                "daily_seasonality": False
-            },
-            autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
-            events={
-                "holiday_lookup_countries": ["US"],
-                "holiday_pre_num_days": 8,
-                "holiday_post_num_days": 3
-            },
-            regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
-        )
+    seasonality={
+        "yearly_seasonality": 4,     # Fourier order (int)
+        "weekly_seasonality": False, # explicit off for weekly data
+        "monthly_seasonality": False,
+        "daily_seasonality": False,
+        "quarterly_seasonality": False,
+    },
+    # >>> Correct autoregression schema for your Greykite version
+    autoregression={
+        "autoreg_dict": {
+            "lag_dict": {
+                # AR lags you wanted
+                "orders": [1, 2, 3, 4, 52],
+                # optional: "aggregation_type": "mean",
+                # optional: "intervals": [1],  # default is fine for weekly
+            }
+            # optional: "series_na_fill_func": None / "zero" / "ffill"
+        }
+    },
+    events={
+        "holiday_lookup_countries": ["US"],
+        "holiday_pre_num_days": 8,
+        "holiday_post_num_days": 3
+    },
+    regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
+)
+
 
 
         evaluation = EvaluationPeriodParam(
