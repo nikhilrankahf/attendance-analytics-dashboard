@@ -160,21 +160,20 @@ def run_greykite_realistic_forecast(
         )
 
         model_components = ModelComponentsParam(
-            seasonality={
-                "yearly_seasonality": {
-                    "seas_names": ["yearly"],
-                    "fourier_series": {"yearly": {"period": 52.18, "order": 4}}
-                }
-                # weekly_seasonality intentionally removed (not identifiable with one obs/week)
-            },
-            autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
-            events={
-                "holiday_lookup_countries": ["US"],
-                "holiday_pre_num_days": 8,
-                "holiday_post_num_days": 3
-            },
-            regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
-        )
+    seasonality={
+        # yearly seasonality with Fourier order 4
+        "yearly_seasonality": 4,
+        # disable weekly at weekly sampling (not identifiable)
+        "weekly_seasonality": None
+    },
+    autoregression={"autoreg_dict": {"autoreg_orders": [1, 2, 3, 4, 52]}},
+    events={
+        "holiday_lookup_countries": ["US"],
+        "holiday_pre_num_days": 8,
+        "holiday_post_num_days": 3
+    },
+    regressors={"regressor_cols": ["ROLL_MEAN_4_S2", "ROLL_MEDIAN_4_S2"]}
+)
 
         evaluation = EvaluationPeriodParam(
             test_horizon=2,                         # exactly T+2
