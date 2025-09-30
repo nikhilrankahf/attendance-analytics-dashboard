@@ -18,6 +18,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import warnings
+import argparse
 from sklearn.metrics import mean_absolute_error
 
 # Greykite imports
@@ -412,6 +413,14 @@ def assemble_output_rows(
 def main():
     print("=== ENHANCED ATTENDANCE FORECASTING WITH GREYKITE (OLD CSV SCHEMA) ===")
     
+    # CLI filters
+    parser = argparse.ArgumentParser(description="Enhanced Attendance Forecasting with optional filters")
+    parser.add_argument("--work_location", type=str, default=None, help="Filter to a single WORK_LOCATION")
+    parser.add_argument("--shift_time", type=str, default=None, help="Filter to a single SHIFT_TIME")
+    parser.add_argument("--department_group", type=str, default=None, help="Filter to a single DEPARTMENT_GROUP")
+    parser.add_argument("--min_week", type=str, default=None, help="Minimum target week (YYYY-Www) for forecasting, e.g., 2025-W28")
+    args = parser.parse_args()
+    
     # Load data
     input_file = "/Users/nikhil.ranka/attendance-analytics-dashboard/Labor_Management-Greykite_Input.csv"
     try:
@@ -457,6 +466,32 @@ def main():
     df = df.drop_duplicates(subset=available_key_columns, keep="last")
     df = df.sort_values(["WEEK_BEGIN"]).reset_index(drop=True)
 
+    # Apply segment filters (do NOT filter by min_week here; keep history for training)
+    if any([args.work_location, args.shift_time, args.department_group]):
+        print("\nApplying segment filters:")
+        if args.work_location is not None:
+            df = df[df["WORK_LOCATION"] == args.work_location]
+            print(f"  WORK_LOCATION == {args.work_location} -> {len(df)} rows")
+        if args.shift_time is not None and "SHIFT_TIME" in df.columns:
+            df = df[df["SHIFT_TIME"] == args.shift_time]
+            print(f"  SHIFT_TIME == {args.shift_time} -> {len(df)} rows")
+        if args.department_group is not None and "DEPARTMENT_GROUP" in df.columns:
+            df = df[df["DEPARTMENT_GROUP"] == args.department_group]
+            print(f"  DEPARTMENT_GROUP == {args.department_group} -> {len(df)} rows")
+        if len(df) == 0:
+            print("✗ After applying filters, no data remains. Exiting.")
+            return
+
+    # Determine forecast start date from min_week if provided (targets only; training can use prior weeks)
+    forecast_start_date = "2024-01-01"
+    if args.min_week is not None:
+        try:
+            min_week_ts = week_to_thursday_date(args.min_week)
+            forecast_start_date = min_week_ts.strftime("%Y-%m-%d")
+            print(f"\nForecast targets constrained to weeks >= {args.min_week} (start date {forecast_start_date})")
+        except Exception as e:
+            print(f"! Warning: Could not parse --min_week '{args.min_week}': {e}. Using default {forecast_start_date}")
+
     # Grouping columns
     grouping_cols = ["WORK_LOCATION", "SHIFT_TIME", "DEPARTMENT_GROUP"]
     available_cols = [c for c in grouping_cols if c in df.columns]
@@ -486,7 +521,7 @@ def main():
         gk_df = run_greykite_realistic_forecast(
             df_group=df_group,
             actual_col=attendance_col,
-            forecast_start_date="2024-01-01",
+            forecast_start_date=forecast_start_date,
             gap_weeks=1
         )
 
@@ -497,7 +532,7 @@ def main():
             fb_df = baseline_realistic_forecast(
                 df_group=df_group,
                 actual_col=attendance_col,
-                forecast_start_date="2024-01-01",
+                forecast_start_date=forecast_start_date,
                 gap_weeks=1,
                 window=4
             )
