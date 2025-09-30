@@ -122,8 +122,8 @@ def run_greykite_realistic_forecast(
 
     forecast_start = pd.to_datetime(forecast_start_date)
 
-    # Winsorize target for robustness (1–99 pct)
-    lo, hi = df_group[actual_col].quantile([0.01, 0.99])
+    # Winsorize target for robustness (0.5–99.5 pct)
+    lo, hi = df_group[actual_col].quantile([0.005, 0.995])
     df_group[actual_col] = df_group[actual_col].clip(lo, hi)
 
     # Leakage-safe regressors (shift=2)
@@ -220,6 +220,12 @@ def run_greykite_realistic_forecast(
                 forecast_value = rowf.get("forecast", np.nan)
                 lower_value = rowf.get("forecast_lower", np.nan) if "forecast_lower" in fdf.columns else np.nan
                 upper_value = rowf.get("forecast_upper", np.nan) if "forecast_upper" in fdf.columns else np.nan
+                # after result is available and BEFORE you append results_rows
+                tail = train_data.tail(12).copy()
+                ins = result.model.predict(tail[["WEEK_BEGIN"]].rename(columns={"WEEK_BEGIN": "ts"}))
+                resid = tail[actual_col].to_numpy() - ins["forecast"].to_numpy()
+                bias = np.nanmean(resid)
+                forecast_value = forecast_value + (0.0 if np.isnan(bias) else bias)
 
                 results_rows.append({
                     "WEEK_BEGIN": target_week,
@@ -541,7 +547,7 @@ def main():
             )
             if fb_df is None or fb_df.empty:
                 print("  No baseline could be produced (insufficient history before cutoffs). Skipping segment.")
-            continue
+                continue
         
         # Assemble rows in old schema (lowercase + week_number)
         segment_rows = assemble_output_rows(
