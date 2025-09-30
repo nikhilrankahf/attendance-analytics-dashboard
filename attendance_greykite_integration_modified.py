@@ -100,6 +100,9 @@ def leakage_safe_ma4_shift2(series: pd.Series) -> pd.Series:
 # Greykite realistic forecast (T+2 with gap=1)
 # Returns a DataFrame with rows per target week (WEEK_BEGIN, GREYKITE_FORECAST, intervals if available, etc.)
 # ---------------------------
+# ---------------------------
+# Greykite realistic forecast (T+2 with gap=1) — uses 'y' as modeling target
+# ---------------------------
 def run_greykite_realistic_forecast(
     df_group: pd.DataFrame,
     actual_col: str,
@@ -115,21 +118,29 @@ def run_greykite_realistic_forecast(
     MIN_TRAIN_WEEKS = 52
 
     # Robust prep
-    df_group = df_group.dropna(subset=["WEEK_BEGIN"]).sort_values("WEEK_BEGIN").reset_index(drop=True)
+    df_group = (
+        df_group
+        .dropna(subset=["WEEK_BEGIN"])
+        .sort_values("WEEK_BEGIN")
+        .reset_index(drop=True)
+        .copy()
+    )
     if len(df_group) < MIN_TRAIN_WEEKS:
         print(f"    Skipping Greykite: insufficient total history ({len(df_group)} < {MIN_TRAIN_WEEKS})")
         return pd.DataFrame()
 
+    # --- Standardize modeling target to 'y' (do NOT overwrite original actuals) ---
+    df_group["y"] = pd.to_numeric(df_group[actual_col], errors="coerce")
+
+    # Winsorize the modeling target y for robustness (adjust thresholds if needed)
+    lo, hi = df_group["y"].quantile([0.005, 0.995])
+    df_group["y"] = df_group["y"].clip(lo, hi)
+
+    # Leakage-safe rolling features (optional regressors later; no leakage because of shift)
+    df_group["ROLL_MEAN_4_S2"]   = df_group["y"].rolling(4, min_periods=1).mean().shift(2)
+    df_group["ROLL_MEDIAN_4_S2"] = df_group["y"].rolling(4, min_periods=1).median().shift(2)
+
     forecast_start = pd.to_datetime(forecast_start_date)
-
-    # Winsorize target for robustness (0.5–99.5 pct)
-    lo, hi = df_group[actual_col].quantile([0.005, 0.995])
-    df_group[actual_col] = df_group[actual_col].clip(lo, hi)
-
-    # Leakage-safe regressors (shift=2)
-    df_group["ROLL_MEAN_4_S2"] = df_group[actual_col].rolling(4, min_periods=1).mean().shift(2)
-    df_group["ROLL_MEDIAN_4_S2"] = df_group[actual_col].rolling(4, min_periods=1).median().shift(2)
-
     forecast_weeks = df_group[df_group["WEEK_BEGIN"] >= forecast_start].copy()
     if forecast_weeks.empty:
         print(f"    No data found from {forecast_start_date} onwards")
@@ -142,9 +153,10 @@ def run_greykite_realistic_forecast(
         target_week = row["WEEK_BEGIN"]
         actual_value = row[actual_col]
 
+        # Training cutoff T-2 (gap=1)
         training_cutoff = target_week - pd.Timedelta(weeks=gap_weeks + 1)
         train_data = df_group[df_group["WEEK_BEGIN"] <= training_cutoff].copy()
-        train_data = train_data.dropna(subset=["WEEK_BEGIN", actual_col])
+        train_data = train_data.dropna(subset=["WEEK_BEGIN", "y"])
 
         if len(train_data) < MIN_TRAIN_WEEKS:
             print(f"    Skip target {safe_week_str(target_week)}: train weeks {len(train_data)} < {MIN_TRAIN_WEEKS}")
@@ -155,12 +167,14 @@ def run_greykite_realistic_forecast(
             f"{safe_week_str(train_data['WEEK_BEGIN'].max())} (gap={gap_weeks})"
         )
 
+        # Greykite metadata: point the model to 'y'
         metadata = MetadataParam(
             time_col="WEEK_BEGIN",
-            value_col=actual_col,
+            value_col="y",     # <-- use standardized modeling target
             freq="W-THU"
         )
 
+        # Model components (AR kept on with version-safe schema)
         model_components = ModelComponentsParam(
             seasonality={
                 "yearly_seasonality": 4,
@@ -171,16 +185,11 @@ def run_greykite_realistic_forecast(
             },
             autoregression={
                 "autoreg_dict": {
-                    "lag_dict": {                  # correct key (not 'autoreg_lag_dict')
-                        "orders": [1, 2, 3, 4, 52] # AR lags
-                        # optional:
-                        # "aggregation_type": "mean",
-                        # "intervals": [1],
+                    "lag_dict": {                  # correct key
+                        "orders": [1, 2, 3, 4, 52] # drop 52 if your install complains
                     }
-                # optional:
-                # "series_na_fill_func": "zero"  # or "ffill"
-            }
-        },
+                }
+            },
             events={
                 "holiday_lookup_countries": ["US"],
                 "holiday_pre_num_days": 8,
@@ -194,7 +203,7 @@ def run_greykite_realistic_forecast(
             cv_horizon=2,
             cv_min_train_periods=MIN_TRAIN_WEEKS,
             cv_use_most_recent_splits=True,
-            cv_max_splits=0
+            cv_max_splits=0   # no CV inside the rolling loop
         )
 
         try:
@@ -202,12 +211,12 @@ def run_greykite_realistic_forecast(
                 df=train_data,
                 config=ForecastConfig(
                     model_template=ModelTemplateEnum.SILVERKITE.name,
-                    forecast_horizon=gap_weeks + 1,
-                    coverage=0.95,
+                    forecast_horizon=gap_weeks + 1,   # (=2), take index 1
+                    coverage=0.95,                    # keep if you want intervals; set None for speed
                     metadata_param=metadata,
                     model_components_param=model_components,
                     evaluation_metric_param=EvaluationMetricParam(
-                        cv_selection_metric="MeanAbsoluteError"
+                        cv_selection_metric="MeanAbsoluteError"  # switch to sMAPE if you prefer APE-like selection
                     ),
                     evaluation_period_param=evaluation,
                     computation_param=ComputationParam(n_jobs=-1)
@@ -216,20 +225,24 @@ def run_greykite_realistic_forecast(
 
             fdf = result.forecast.df
             if len(fdf) > gap_weeks:
+                # Take the T+2 point (index = gap_weeks)
                 rowf = fdf.iloc[gap_weeks]
                 forecast_value = rowf.get("forecast", np.nan)
                 lower_value = rowf.get("forecast_lower", np.nan) if "forecast_lower" in fdf.columns else np.nan
                 upper_value = rowf.get("forecast_upper", np.nan) if "forecast_upper" in fdf.columns else np.nan
-                # after result is available and BEFORE you append results_rows
+
+                # --- Tiny bias correction using last 12 in-sample residuals on 'y' ---
                 tail = train_data.tail(12).copy()
+                # Predict on the last 12 training timestamps
                 ins = result.model.predict(tail[["WEEK_BEGIN"]].rename(columns={"WEEK_BEGIN": "ts"}))
-                resid = tail[actual_col].to_numpy() - ins["forecast"].to_numpy()
+                resid = tail["y"].to_numpy() - ins["forecast"].to_numpy()
                 bias = np.nanmean(resid)
-                forecast_value = forecast_value + (0.0 if np.isnan(bias) else bias)
+                if not np.isnan(bias):
+                    forecast_value = forecast_value + bias
 
                 results_rows.append({
                     "WEEK_BEGIN": target_week,
-                    "ACTUAL_ATTENDANCE_RATE": actual_value,
+                    "ACTUAL_ATTENDANCE_RATE": actual_value,   # keep original actuals for output mapping
                     "GREYKITE_FORECAST": forecast_value,
                     "GREYKITE_FORECAST_LOWER_95": lower_value,
                     "GREYKITE_FORECAST_UPPER_95": upper_value,
