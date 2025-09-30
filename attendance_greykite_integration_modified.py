@@ -54,7 +54,7 @@ def prepare_data_for_greykite(df_group, actual_col='WEEKLY_ATTENDANCE_RATE'):
 
 def run_enhanced_greykite_forecast(df_group, actual_col='WEEKLY_ATTENDANCE_RATE', 
                                  forecast_horizon=5, coverage=0.95, plot=False,
-                                 target_year='2025'):
+                                 target_year='2025', min_week=None):
     """
     Enhanced Greykite forecasting with HelloFresh-style implementation.
     
@@ -195,6 +195,9 @@ def run_enhanced_greykite_forecast(df_group, actual_col='WEEKLY_ATTENDANCE_RATE'
         print(f"\n  === GENERATING ROLLING T+2 FORECASTS WITH GAP=1 ===")
 
         target_weeks = original_df[original_df['WEEK_NUMBER'].str.startswith(target_year)].copy()
+        # If a minimum week threshold is provided (e.g., '2025-W28'), filter to that and later
+        if isinstance(min_week, str) and min_week[:4] == str(target_year):
+            target_weeks = target_weeks[target_weeks['WEEK_NUMBER'] >= min_week]
         if target_weeks.empty:
             print(f"  No {target_year} weeks found in data")
             future_results = pd.DataFrame()
@@ -388,7 +391,14 @@ def main():
         combo_str = ", ".join([f"{col}='{combo[col]}'" for col in available_cols])
         print(f"  {i+1}. {combo_str}")
     
-    # Process all combinations
+    # Restrict to NJ Newark Lister Ave, PM, Production only
+    combinations = combinations[
+        (combinations['WORK_LOCATION'] == 'NJ Newark Lister Ave') &
+        (combinations['SHIFT_TIME'] == 'PM') &
+        (combinations['DEPARTMENT_GROUP'] == 'Production')
+    ].reset_index(drop=True)
+
+    # Process filtered combinations
     all_output_data = []
     successful_combinations = 0
     
@@ -410,19 +420,21 @@ def main():
             print("✗ Insufficient data for analysis (minimum 20 records required)")
             continue
         
-        # Run enhanced Greykite forecasting for both 2024 and 2025
+        # Run enhanced Greykite forecasting for both 2024 and 2025 (we will filter inside to 2025-W28+)
         target_years = ['2024', '2025']
         all_results = {}
         combination_successful = False
         
         for target_year in target_years:
             print(f"    Processing {target_year} forecasts...")
+            min_week_threshold = '2025-W28' if target_year == '2025' else None
             results = run_enhanced_greykite_forecast(
                 df_group=filtered_df,
                 actual_col=actual_col,
                 forecast_horizon=1,  # 1-week horizon for weekly planning
                 coverage=0.95,  # 95% prediction intervals
-                target_year=target_year
+                target_year=target_year,
+                min_week=min_week_threshold
             )
             
             if results is not None:
