@@ -23,6 +23,7 @@ from sklearn.metrics import mean_absolute_error
 # Greykite imports
 from greykite.framework.templates.forecaster import Forecaster
 from greykite.framework.templates.model_templates import ModelTemplateEnum
+from greykite.framework.templates.autogen.forecast_config import ComputationParam
 from greykite.framework.templates.autogen.forecast_config import (
     ForecastConfig, MetadataParam, ModelComponentsParam, EvaluationMetricParam, EvaluationPeriodParam
 )
@@ -181,22 +182,20 @@ def run_greykite_realistic_forecast(
 
 
         evaluation = EvaluationPeriodParam(
-            test_horizon=2,                         # exactly T+2
-            periods_between_train_test=1,           # 1-week blackout
-            cv_horizon=2,
-            cv_min_train_periods=MIN_TRAIN_WEEKS,
-            cv_expanding_window=True,
-            cv_use_most_recent_splits=True,
-            cv_periods_between_splits=1,
-            cv_periods_between_train_test=1,
-            cv_max_splits=3
-        )
+                test_horizon=2,                      # T+2
+                periods_between_train_test=1,        # 1-week blackout
+                cv_horizon=2,                        # harmless when cv_max_splits=0
+                cv_min_train_periods=MIN_TRAIN_WEEKS,
+                cv_use_most_recent_splits=True,      # harmless when cv_max_splits=0
+                cv_max_splits=0                      # ✅ TURN OFF CV inside the rolling loop
+            )
+
 
         try:
             result = forecaster.run_forecast_config(
                 df=train_data,
                 config=ForecastConfig(
-                    model_template=ModelTemplateEnum.AUTO.name,
+                    model_template=ModelTemplateEnum.SILVERKITE.name,
                     forecast_horizon=gap_weeks + 1,  # =2; take step index 1
                     coverage=0.95,  # intervals if available
                     metadata_param=metadata,
@@ -204,7 +203,8 @@ def run_greykite_realistic_forecast(
                     evaluation_metric_param=EvaluationMetricParam(
                         cv_selection_metric="MeanAbsoluteError"
                     ),
-                    evaluation_period_param=evaluation
+                    evaluation_period_param=evaluation,
+                    computation_param=ComputationParam(n_jobs=-1)
                 )
             )
 
