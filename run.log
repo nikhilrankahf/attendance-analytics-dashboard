@@ -1,30 +1,96 @@
-=== ENHANCED ATTENDANCE FORECASTING WITH GREYKITE (OLD CSV SCHEMA) ===
+=== ENHANCED ATTENDANCE FORECASTING WITH GREYKITE ===
+Incorporating HelloFresh-style patterns:
+- US holiday effects
+- Prediction intervals
+- Cross-validation
+- Thursday week alignment
+- Rolling 1-week forecasting with gap rule
+- Processing ALL combinations of location, shift, and department
+- Generating forecasts for BOTH 2024 and 2025
 
 ✓ Loaded data: 5391 records from /Users/nikhil.ranka/attendance-analytics-dashboard/Labor_Management-Greykite_Input.csv
 Available columns: ['WEEK_NUMBER', 'WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP', 'WEEKLY_ATTENDANCE_RATE', 'FOUR_WEEK_ROLLING_AVG', 'SIX_WEEK_ROLLING_AVG', 'EXPONENTIAL_SMOOTHING_0_2', 'EXPONENTIAL_SMOOTHING_0_4', 'EXPONENTIAL_SMOOTHING_0_6', 'EXPONENTIAL_SMOOTHING_0_8', 'EXPONENTIAL_SMOOTHING_1']
 Using actuals column: 'WEEKLY_ATTENDANCE_RATE'
 
-Applying segment filters:
-  WORK_LOCATION == NJ Newark Lister Ave -> 886 rows
-  SHIFT_TIME == PM -> 443 rows
-  DEPARTMENT_GROUP == Production -> 194 rows
-
-Forecast targets constrained to weeks >= 2025-W28 (start date 2025-07-10)
-
 Grouping by: ['WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP']
+Found 52 unique combinations to process
+  1. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+  2. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='AM', DEPARTMENT_GROUP='Quality'
+  3. WORK_LOCATION='CO Aurora', SHIFT_TIME='AM', DEPARTMENT_GROUP='Shipping'
+  4. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='AM', DEPARTMENT_GROUP='Production'
+  5. WORK_LOCATION='TX Irving', SHIFT_TIME='AM', DEPARTMENT_GROUP='Quality'
+  6. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='PM', DEPARTMENT_GROUP='Warehouse'
+  7. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='AM', DEPARTMENT_GROUP='Warehouse'
+  8. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='AM', DEPARTMENT_GROUP='Shipping'
+  9. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+  10. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='AM', DEPARTMENT_GROUP='Warehouse'
+  11. WORK_LOCATION='TX Irving', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+  12. WORK_LOCATION='TX Irving', SHIFT_TIME='PM', DEPARTMENT_GROUP='Warehouse'
+  13. WORK_LOCATION='CO Aurora', SHIFT_TIME='PM', DEPARTMENT_GROUP='Warehouse'
+  14. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='PM', DEPARTMENT_GROUP='Quality'
+  15. WORK_LOCATION='CO Aurora', SHIFT_TIME='PM', DEPARTMENT_GROUP='Quality'
+  16. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='PM', DEPARTMENT_GROUP='Quality'
+  17. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='PM', DEPARTMENT_GROUP='Warehouse'
+  18. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='PM', DEPARTMENT_GROUP='Shipping'
+  19. WORK_LOCATION='TX Irving', SHIFT_TIME='PM', DEPARTMENT_GROUP='Shipping'
+  20. WORK_LOCATION='TX Irving', SHIFT_TIME='AM', DEPARTMENT_GROUP='Shipping'
+  21. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+  22. WORK_LOCATION='CO Aurora', SHIFT_TIME='AM', DEPARTMENT_GROUP='Quality'
+  23. WORK_LOCATION='TX Irving', SHIFT_TIME='AM', DEPARTMENT_GROUP='Warehouse'
+  24. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='AM', DEPARTMENT_GROUP='Production'
+  25. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='AM', DEPARTMENT_GROUP='Warehouse'
+  26. WORK_LOCATION='CO Aurora', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+  27. WORK_LOCATION='CO Aurora', SHIFT_TIME='AM', DEPARTMENT_GROUP='Warehouse'
+  28. WORK_LOCATION='CO Aurora', SHIFT_TIME='PM', DEPARTMENT_GROUP='Shipping'
+  29. WORK_LOCATION='CO Aurora', SHIFT_TIME='AM', DEPARTMENT_GROUP='Production'
+  30. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='PM', DEPARTMENT_GROUP='Warehouse'
+  31. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='AM', DEPARTMENT_GROUP='Quality'
+  32. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='PM', DEPARTMENT_GROUP='Quality'
+  33. WORK_LOCATION='TX Irving', SHIFT_TIME='PM', DEPARTMENT_GROUP='Quality'
+  34. WORK_LOCATION='AZ Phoenix', SHIFT_TIME='AM', DEPARTMENT_GROUP='Production'
+  35. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='AM', DEPARTMENT_GROUP='Shipping'
+  36. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='AM', DEPARTMENT_GROUP='Quality'
+  37. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='AM', DEPARTMENT_GROUP='Shipping'
+  38. WORK_LOCATION='TX Irving', SHIFT_TIME='AM', DEPARTMENT_GROUP='Production'
+  39. WORK_LOCATION='NJ Newark Lister Ave', SHIFT_TIME='PM', DEPARTMENT_GROUP='Shipping'
+  40. WORK_LOCATION='NJ Swedesboro Commerce Blvd', SHIFT_TIME='PM', DEPARTMENT_GROUP='Shipping'
+  41. WORK_LOCATION='TX Grand Prairie Post and Paddock', SHIFT_TIME='AM', DEPARTMENT_GROUP='Production'
+  42. WORK_LOCATION='TX Grand Prairie Post and Paddock', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+  43. WORK_LOCATION='TX Grand Prairie Post and Paddock', SHIFT_TIME='AM', DEPARTMENT_GROUP='Warehouse'
+  44. WORK_LOCATION='TX Grand Prairie Post and Paddock', SHIFT_TIME='PM', DEPARTMENT_GROUP='Shipping'
+  45. WORK_LOCATION='TX Grand Prairie Post and Paddock', SHIFT_TIME='AM', DEPARTMENT_GROUP='Shipping'
+  46. WORK_LOCATION='TX Grand Prairie Post and Paddock', SHIFT_TIME='PM', DEPARTMENT_GROUP='Warehouse'
+  47. WORK_LOCATION='GA Newnan', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+  48. WORK_LOCATION='GA Newnan', SHIFT_TIME='PM', DEPARTMENT_GROUP='Shipping'
+  49. WORK_LOCATION='GA Newnan', SHIFT_TIME='AM', DEPARTMENT_GROUP='Warehouse'
+  50. WORK_LOCATION='GA Newnan', SHIFT_TIME='AM', DEPARTMENT_GROUP='Shipping'
+  51. WORK_LOCATION='GA Newnan', SHIFT_TIME='PM', DEPARTMENT_GROUP='Warehouse'
+  52. WORK_LOCATION='GA Newnan', SHIFT_TIME='AM', DEPARTMENT_GROUP='Production'
 
-Processing: NJ Newark Lister Ave - PM - Production
-Data points: 194
-    Greykite for 2025-W28 using 180 weeks up to 2025-W26 (gap=1)
-      Greykite error at 2025-W28: "None of [Index(['y'], dtype='object')] are in the [columns]"
-    Greykite for 2025-W29 using 181 weeks up to 2025-W27 (gap=1)
-      Greykite error at 2025-W29: "None of [Index(['y'], dtype='object')] are in the [columns]"
-    Greykite for 2025-W30 using 182 weeks up to 2025-W28 (gap=1)
-      Greykite error at 2025-W30: "None of [Index(['y'], dtype='object')] are in the [columns]"
-    Greykite for 2025-W31 using 183 weeks up to 2025-W29 (gap=1)
-      Greykite error at 2025-W31: "None of [Index(['y'], dtype='object')] are in the [columns]"
-    Greykite for 2025-W32 using 184 weeks up to 2025-W30 (gap=1)
-      Greykite error at 2025-W32: "None of [Index(['y'], dtype='object')] are in the [columns]"
-    Greykite for 2025-W33 using 185 weeks up to 2025-W31 (gap=1)
-      Greykite error at 2025-W33: "None of [Index(['y'], dtype='object')] are in the [columns]"
-    Greykite for 2025-W34 using 186 weeks up to 2025-W32 (gap=1)
+================================================================================
+PROCESSING COMBINATION 1/52
+WORK_LOCATION='AZ Phoenix', SHIFT_TIME='PM', DEPARTMENT_GROUP='Production'
+================================================================================
+Filtered data: 196 records
+    Processing 2024 forecasts...
+  === ENHANCED GREYKITE ANALYSIS ===
+  Total historical data: 194 weeks
+  Date range: 2022-01-13 to 2025-10-02
+  Attendance stats: Mean=76.75%, Std=8.87%
+  Forecast horizon: 1 weeks
+  Prediction interval coverage: 95%
+  Running Greykite with cross-validation...
+Fitting 8 folds for each of 1 candidates, totalling 8 fits
+  ✓ Greykite model completed successfully
+
+  === CROSS-VALIDATION RESULTS ===
+  Best model CV metrics:
+    MAE: N/A
+    RMSE: N/A
+
+  === BACKTEST EVALUATION ===
+  Train vs Test metrics:
+
+  === GENERATING ROLLING T+2 FORECASTS WITH GAP=1 ===
+  Generating T+2 forecasts for 52 weeks in 2024
+Fitting 3 folds for each of 1 candidates, totalling 3 fits
