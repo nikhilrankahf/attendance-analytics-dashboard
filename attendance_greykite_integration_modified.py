@@ -131,13 +131,13 @@ def run_greykite_realistic_forecast(
     df_group["ROLL_MEDIAN_4_S2"] = df_group[actual_col].rolling(4, min_periods=1).median().shift(2)
 
     forecast_weeks = df_group[df_group["WEEK_BEGIN"] >= forecast_start].copy()
-    if len(forecast_weeks) == 0:
+    if forecast_weeks.empty:
         print(f"    No data found from {forecast_start_date} onwards")
         return pd.DataFrame()
 
     results_rows = []
     forecaster = Forecaster()
-    
+
     for _, row in forecast_weeks.iterrows():
         target_week = row["WEEK_BEGIN"]
         actual_value = row[actual_col]
@@ -158,53 +158,52 @@ def run_greykite_realistic_forecast(
         metadata = MetadataParam(
             time_col="WEEK_BEGIN",
             value_col=actual_col,
-            freq="W-THU"  # keep Thursday anchor (old convention)
+            freq="W-THU"
         )
 
         model_components = ModelComponentsParam(
-    seasonality={
-        "yearly_seasonality": 4,     # Fourier order (int)
-        "weekly_seasonality": False, # explicitly off at weekly sampling
-        "monthly_seasonality": False,
-        "daily_seasonality": False,
-        "quarterly_seasonality": False,
-    },
-    autoregression={
-    "autoreg_dict": {
-        "lag_dict": {
-            "orders": [1, 2, 3, 4, 52]   # short-term + same week last year
-        }
-    }
-},
-    events={
-        "holiday_lookup_countries": ["US"],
-        "holiday_pre_num_days": 8,
-        "holiday_post_num_days": 3
-    }
-    # <- remove regressors entirely to avoid fut_df future-frame errors
-)
-
-
-
-
+            seasonality={
+                "yearly_seasonality": 4,
+                "weekly_seasonality": False,
+                "monthly_seasonality": False,
+                "daily_seasonality": False,
+                "quarterly_seasonality": False,
+            },
+            autoregression={
+                "autoreg_dict": {
+                    "lag_dict": {                  # correct key (not 'autoreg_lag_dict')
+                        "orders": [1, 2, 3, 4, 52] # AR lags
+                        # optional:
+                        # "aggregation_type": "mean",
+                        # "intervals": [1],
+                    }
+                # optional:
+                # "series_na_fill_func": "zero"  # or "ffill"
+            }
+        },
+            events={
+                "holiday_lookup_countries": ["US"],
+                "holiday_pre_num_days": 8,
+                "holiday_post_num_days": 3
+            }
+        )
 
         evaluation = EvaluationPeriodParam(
-                test_horizon=2,                      # T+2
-                periods_between_train_test=1,        # 1-week blackout
-                cv_horizon=2,                        # harmless when cv_max_splits=0
-                cv_min_train_periods=MIN_TRAIN_WEEKS,
-                cv_use_most_recent_splits=True,      # harmless when cv_max_splits=0
-                cv_max_splits=0                      # ✅ TURN OFF CV inside the rolling loop
-            )
-
+            test_horizon=2,
+            periods_between_train_test=1,
+            cv_horizon=2,
+            cv_min_train_periods=MIN_TRAIN_WEEKS,
+            cv_use_most_recent_splits=True,
+            cv_max_splits=0
+        )
 
         try:
             result = forecaster.run_forecast_config(
                 df=train_data,
                 config=ForecastConfig(
                     model_template=ModelTemplateEnum.SILVERKITE.name,
-                    forecast_horizon=gap_weeks + 1,  # =2; take step index 1
-                    coverage=0.95,  # intervals if available
+                    forecast_horizon=gap_weeks + 1,
+                    coverage=0.95,
                     metadata_param=metadata,
                     model_components_param=model_components,
                     evaluation_metric_param=EvaluationMetricParam(
@@ -215,7 +214,6 @@ def run_greykite_realistic_forecast(
                 )
             )
 
-            # Pull the step at index 'gap_weeks' (1) from the forecast
             fdf = result.forecast.df
             if len(fdf) > gap_weeks:
                 rowf = fdf.iloc[gap_weeks]
@@ -233,7 +231,6 @@ def run_greykite_realistic_forecast(
                     "TRAINING_END_DATE": train_data["WEEK_BEGIN"].max(),
                     "GAP_WEEKS": gap_weeks
                 })
-
         except Exception as e:
             print(f"      Greykite error at {safe_week_str(target_week)}: {e}")
             continue

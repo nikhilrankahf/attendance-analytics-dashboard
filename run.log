@@ -16,23 +16,33 @@ Grouping by: ['WORK_LOCATION', 'SHIFT_TIME', 'DEPARTMENT_GROUP']
 Processing: NJ Newark Lister Ave - PM - Production
 Data points: 194
     Greykite for 2025-W28 using 180 weeks up to 2025-W26 (gap=1)
+      Greykite error at 2025-W28: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W29 using 181 weeks up to 2025-W27 (gap=1)
+      Greykite error at 2025-W29: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W30 using 182 weeks up to 2025-W28 (gap=1)
+      Greykite error at 2025-W30: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W31 using 183 weeks up to 2025-W29 (gap=1)
+      Greykite error at 2025-W31: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W32 using 184 weeks up to 2025-W30 (gap=1)
+      Greykite error at 2025-W32: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W33 using 185 weeks up to 2025-W31 (gap=1)
+      Greykite error at 2025-W33: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W34 using 186 weeks up to 2025-W32 (gap=1)
+      Greykite error at 2025-W34: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W35 using 187 weeks up to 2025-W33 (gap=1)
+      Greykite error at 2025-W35: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W36 using 188 weeks up to 2025-W34 (gap=1)
+      Greykite error at 2025-W36: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W37 using 189 weeks up to 2025-W35 (gap=1)
+      Greykite error at 2025-W37: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W38 using 190 weeks up to 2025-W36 (gap=1)
+      Greykite error at 2025-W38: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W39 using 191 weeks up to 2025-W37 (gap=1)
+      Greykite error at 2025-W39: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
     Greykite for 2025-W40 using 192 weeks up to 2025-W38 (gap=1)
-  Greykite MAE: 15.8261 | Shifted MA(4) MAE: 1.8237
+      Greykite error at 2025-W40: build_autoreg_df() got an unexpected keyword argument 'autoreg_lag_dict'
+  Using baseline fallback for this segment.
 
-✓ Enhanced forecasts saved to: enhanced_attendance_forecast_all_combinations_2024_2025_20250929_203802.csv
-  Records: 13
-  Columns: ['week_number', 'work_location', 'shift_time', 'department_group', 'actual_attendance', 'greykite_forecast', 'greykite_forecast_lower_95', 'greykite_forecast_upper_95', 'four_week_rolling_avg', 'six_week_rolling_avg', 'exponential_smoothing_alpha_2', 'exponential_smoothing_alpha_4', 'exponential_smoothing_alpha_6', 'exponential_smoothing_alpha_8', 'exponential_smoothing_alpha_1', 'four_week_rolling_avg_shift2']
-  Segments processed successfully: 1
+✗ No forecasts generated - no segments had sufficient usable data
 
 === DONE ===
