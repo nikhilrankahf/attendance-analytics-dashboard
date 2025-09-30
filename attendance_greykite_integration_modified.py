@@ -169,7 +169,13 @@ def run_greykite_realistic_forecast(
         "daily_seasonality": False,
         "quarterly_seasonality": False,
     },
-    autoregression=None,             # <- remove AR to avoid API/version issues
+    autoregression={
+    "autoreg_dict": {
+        "lag_dict": {
+            "orders": [1, 2, 3, 4, 52]   # short-term + same week last year
+        }
+    }
+},
     events={
         "holiday_lookup_countries": ["US"],
         "holiday_pre_num_days": 8,
